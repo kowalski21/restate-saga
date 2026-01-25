@@ -212,6 +212,43 @@ const wallet = createSagaVirtualObject(
 );
 ```
 
+## External Client Usage
+
+Use `InferServiceType` to create a type-safe client with `@restatedev/restate-sdk-clients`:
+
+```typescript
+// workflows/checkout.ts
+import { createSagaWorkflow, InferServiceType } from "restate-saga";
+
+export const checkoutWorkflow = createSagaWorkflow(
+  "CheckoutWorkflow",
+  async (saga, input: { productId: string; quantity: number }) => {
+    // ... workflow implementation
+    return { orderId: "123" };
+  }
+);
+
+// Export the type for external clients
+export type CheckoutWorkflow = InferServiceType<typeof checkoutWorkflow>;
+```
+
+```typescript
+// client.ts
+import * as clients from "@restatedev/restate-sdk-clients";
+import type { CheckoutWorkflow } from "./workflows/checkout.js";
+
+const restateClient = clients.connect({ url: "http://localhost:8080" });
+
+// Type-safe client usage - name is constrained to "CheckoutWorkflow"
+const result = await restateClient
+  .serviceClient<CheckoutWorkflow>({ name: "CheckoutWorkflow" })
+  .run({ productId: "SKU123", quantity: 2 });
+
+// TypeScript error if you use the wrong name:
+// .serviceClient<CheckoutWorkflow>({ name: "WrongName" })
+// Error: Type '"WrongName"' is not assignable to type '"CheckoutWorkflow"'
+```
+
 ## API Reference
 
 ### Steps
@@ -239,6 +276,7 @@ const wallet = createSagaVirtualObject(
 
 ### Client Helpers
 
+- `InferServiceType<T>` - Extract service type for use with external clients
 - `workflowClient(ctx, definition)` - Create a typed workflow client
 - `workflowSendClient(ctx, definition)` - Create a fire-and-forget workflow client
 - `objectClient(ctx, definition, key)` - Create a typed object client
