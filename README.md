@@ -248,6 +248,37 @@ const wallet = createSagaVirtualObject(
 - `runNestedSaga(saga, handler)` - Run inline saga logic with shared compensation
 - `createSagaModule(handler)` - Create a reusable saga module
 
+## Examples
+
+See the [`examples/`](./examples) directory for complete working examples:
+
+| Example | Description |
+|---------|-------------|
+| [01-basic-checkout.ts](./examples/01-basic-checkout.ts) | Simple e-commerce checkout with multi-step compensation |
+| [02-user-registration.ts](./examples/02-user-registration.ts) | Registration flow with validation and optional compensation |
+| [03-composed-workflows.ts](./examples/03-composed-workflows.ts) | Workflow composition using `runAsStep` |
+| [04-virtual-object.ts](./examples/04-virtual-object.ts) | Stateful wallet entity with saga support |
+| [05-strict-compensation.ts](./examples/05-strict-compensation.ts) | Hybrid vs strict compensation modes |
+| [06-error-handling.ts](./examples/06-error-handling.ts) | Error registry, mappers, and handling strategies |
+
+To run an example:
+
+```bash
+# Start Restate server
+restate-server
+
+# Run the example
+npx ts-node examples/01-basic-checkout.ts
+
+# Register with Restate
+restate deployments register http://localhost:9080
+
+# Invoke the workflow
+curl -X POST http://localhost:8080/CheckoutWorkflow/run \
+  -H "Content-Type: application/json" \
+  -d '{"productId": "SKU123", "quantity": 2, "amount": 99.99, "currency": "USD", "address": "123 Main St"}'
+```
+
 ## License
 
 MIT
