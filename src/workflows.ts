@@ -28,8 +28,8 @@ function toServiceRetryPolicy(policy?: WorkflowRetryPolicy): object | undefined 
  * Return type for createSagaWorkflow that includes runAsStep capability.
  * Explicitly types the handlers so external clients can infer method signatures.
  */
-export type SagaWorkflowService<Input, Output> = {
-  name: string;
+export type SagaWorkflowService<Name extends string, Input, Output> = {
+  name: Name;
   handlers: {
     run: (ctx: restate.Context, input: Input) => Promise<Output>;
   };
@@ -116,11 +116,11 @@ export type SagaWorkflowService<Input, Output> = {
  * export type CheckoutWorkflow = typeof checkoutWorkflow;
  * ```
  */
-export function createSagaWorkflow<Input, Output>(
-  name: string,
+export function createSagaWorkflow<Name extends string, Input, Output>(
+  name: Name,
   handler: (saga: SagaContext, input: Input) => Promise<Output>,
   options?: SagaWorkflowOptions
-): SagaWorkflowService<Input, Output> {
+): SagaWorkflowService<Name, Input, Output> {
   // Build service options
   const serviceOptions = options
     ? {
@@ -166,15 +166,15 @@ export function createSagaWorkflow<Input, Output>(
       // compensation stack, so they run if the parent fails.
       return handler(parentSaga as SagaContext, input);
     },
-  }) as SagaWorkflowService<Input, Output>;
+  }) as SagaWorkflowService<Name, Input, Output>;
 }
 
 /**
  * Return type for createSagaRestateWorkflow that includes runAsStep capability.
  * Explicitly types the handlers so external clients can infer method signatures.
  */
-export type SagaRestateWorkflowService<Input, Output> = {
-  name: string;
+export type SagaRestateWorkflowService<Name extends string, Input, Output> = {
+  name: Name;
   handlers: {
     run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
   };
@@ -241,6 +241,7 @@ export type SagaRestateWorkflowService<Input, Output> = {
  * ```
  */
 export function createSagaRestateWorkflow<
+  Name extends string,
   Input,
   Output,
   Handlers extends Record<
@@ -248,11 +249,11 @@ export function createSagaRestateWorkflow<
     (ctx: restate.WorkflowSharedContext, input: any) => Promise<any>
   > = Record<string, never>,
 >(
-  name: string,
+  name: Name,
   run: (saga: SagaWorkflowContext, ctx: restate.WorkflowContext, input: Input) => Promise<Output>,
   handlers?: Handlers,
   options?: SagaRestateWorkflowOptions
-): SagaRestateWorkflowService<Input, Output> {
+): SagaRestateWorkflowService<Name, Input, Output> {
   // Build workflow options
   const workflowOptions = options
     ? {
@@ -297,5 +298,5 @@ export function createSagaRestateWorkflow<
       // Execute the handler with the parent's saga context and WorkflowContext.
       return run(parentSaga, parentSaga.ctx, input);
     },
-  }) as SagaRestateWorkflowService<Input, Output>;
+  }) as SagaRestateWorkflowService<Name, Input, Output>;
 }
