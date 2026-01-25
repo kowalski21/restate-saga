@@ -26,8 +26,14 @@ function toServiceRetryPolicy(policy?: WorkflowRetryPolicy): object | undefined 
 
 /**
  * Return type for createSagaWorkflow that includes runAsStep capability.
+ * Explicitly types the handlers so external clients can infer method signatures.
  */
-export type SagaWorkflowService<Input, Output> = ReturnType<typeof restate.service> & {
+export type SagaWorkflowService<Input, Output> = {
+  name: string;
+  handlers: {
+    run: (ctx: restate.Context, input: Input) => Promise<Output>;
+  };
+} & {
   /**
    * Run this workflow as a step in a parent saga.
    *
@@ -165,8 +171,14 @@ export function createSagaWorkflow<Input, Output>(
 
 /**
  * Return type for createSagaRestateWorkflow that includes runAsStep capability.
+ * Explicitly types the handlers so external clients can infer method signatures.
  */
-export type SagaRestateWorkflowService<Input, Output> = ReturnType<typeof restate.workflow> & {
+export type SagaRestateWorkflowService<Input, Output> = {
+  name: string;
+  handlers: {
+    run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
+  };
+} & {
   /**
    * Run this workflow as a step in a parent Restate Workflow saga.
    *

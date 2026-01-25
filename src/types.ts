@@ -195,4 +195,6 @@ export type AnySagaContext = {
  *   .run({ ... });
  * ```
  */
-export type InferServiceType<T> = Omit<T, "runAsStep">;
+export type InferServiceType<T> = T extends { handlers: infer H; name: infer N extends string }
+  ? restate.ServiceDefinition<N, H>
+  : never;
