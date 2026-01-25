@@ -13,7 +13,7 @@ import {
   createSagaStep,
   createSagaStepStrict,
   StepResponse,
-} from "restate-saga";
+} from "../src/index.js";
 
 /**
  * HYBRID MODE (createSagaStep)

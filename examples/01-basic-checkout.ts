@@ -12,7 +12,7 @@ import {
   createSagaWorkflow,
   createSagaStep,
   StepResponse,
-} from "restate-saga";
+} from "../src/index.js";
 
 // Step 1: Reserve inventory
 const reserveInventory = createSagaStep<
@@ -28,8 +28,10 @@ const reserveInventory = createSagaStep<
     return new StepResponse({ reservationId }, { reservationId });
   },
   compensate: async (data) => {
-    // Release the reservation
-    console.log(`Released reservation ${data.reservationId}`);
+    // Release the reservation (use type guard for union type)
+    if ("reservationId" in data) {
+      console.log(`Released reservation ${data.reservationId}`);
+    }
   },
 });
 
@@ -47,8 +49,10 @@ const chargePayment = createSagaStep<
     return new StepResponse({ paymentId }, { paymentId, amount: input.amount });
   },
   compensate: async (data) => {
-    // Refund the payment
-    console.log(`Refunded ${data.amount} for payment ${data.paymentId}`);
+    // Refund the payment (use type guard for union type)
+    if ("paymentId" in data) {
+      console.log(`Refunded ${data.amount} for payment ${data.paymentId}`);
+    }
   },
 });
 
@@ -71,7 +75,7 @@ const createShipment = createSagaStep<
     return new StepResponse({ trackingNumber }, { trackingNumber });
   },
   compensate: async (data) => {
-    if (data.trackingNumber) {
+    if ("trackingNumber" in data && data.trackingNumber) {
       console.log(`Cancelled shipment ${data.trackingNumber}`);
     }
   },

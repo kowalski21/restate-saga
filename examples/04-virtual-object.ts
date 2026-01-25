@@ -13,7 +13,7 @@ import {
   createSagaVirtualObject,
   createSagaStep,
   StepResponse,
-} from "restate-saga";
+} from "../src/index.js";
 
 // Define steps for wallet operations
 
@@ -41,12 +41,14 @@ const creditAccount = createSagaStep<
     );
   },
   compensate: async (data) => {
-    console.log(
-      `Compensating credit: reversing ${data.amount} for txn ${data.transactionId}`
-    );
-    // Note: In a real app, you'd need the ctx to update state
-    // This compensation is tracked for the saga but state reversal
-    // would need to be handled by a subsequent debit
+    if ("transactionId" in data) {
+      console.log(
+        `Compensating credit: reversing ${data.amount} for txn ${data.transactionId}`
+      );
+      // Note: In a real app, you'd need the ctx to update state
+      // This compensation is tracked for the saga but state reversal
+      // would need to be handled by a subsequent debit
+    }
   },
 });
 
@@ -81,7 +83,7 @@ const debitAccount = createSagaStep<
     );
   },
   compensate: async (data) => {
-    if (data.transactionId) {
+    if ("transactionId" in data && data.transactionId) {
       console.log(
         `Compensating debit: reversing ${data.amount} for txn ${data.transactionId}`
       );
@@ -190,23 +192,23 @@ export const wallet = createSagaVirtualObject(
   {
     // Shared handlers (read-only, concurrent access)
 
-    getBalance: async (ctx) => {
-      const balance = (await ctx.get<number>("balance")) || 0;
+    getBalance: async (ctx: restate.ObjectSharedContext) => {
+      const balance = (await ctx.get<number>("balance")) ?? 0;
       return { balance };
     },
 
-    getHistory: async (ctx) => {
-      const history = (await ctx.get<string[]>("history")) || [];
+    getHistory: async (ctx: restate.ObjectSharedContext) => {
+      const history = (await ctx.get<string[]>("history")) ?? [];
       return { history };
     },
 
-    getInfo: async (ctx) => {
-      const balance = (await ctx.get<number>("balance")) || 0;
-      const history = (await ctx.get<string[]>("history")) || [];
+    getInfo: async (ctx: restate.ObjectSharedContext) => {
+      const balance = (await ctx.get<number>("balance")) ?? 0;
+      const history = (await ctx.get<string[]>("history")) ?? [];
       return {
         balance,
         transactionCount: history.length,
-        lastTransaction: history[history.length - 1] || null,
+        lastTransaction: history[history.length - 1] ?? null,
       };
     },
   }

@@ -125,7 +125,7 @@ export function getGlobalErrorMapper(): ErrorMapper | null {
 function checkGlobalTerminalError(err: unknown): restate.TerminalError | undefined {
   // Check registered error classes
   if (err instanceof Error) {
-    for (const errorClass of globalErrorConfig.terminalErrorClasses) {
+    for (const errorClass of Array.from(globalErrorConfig.terminalErrorClasses)) {
       if (err instanceof errorClass) {
         return new restate.TerminalError(err.message);
       }

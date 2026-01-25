@@ -12,7 +12,7 @@ import {
   createSagaWorkflow,
   createSagaStep,
   StepResponse,
-} from "restate-saga";
+} from "../src/index.js";
 
 // ============================================================
 // Payment Workflow (can run standalone or as part of order)
@@ -30,7 +30,9 @@ const authorizePayment = createSagaStep<
     return new StepResponse({ authId }, { authId });
   },
   compensate: async (data) => {
-    console.log(`Voided authorization ${data.authId}`);
+    if ("authId" in data) {
+      console.log(`Voided authorization ${data.authId}`);
+    }
   },
 });
 
@@ -46,7 +48,9 @@ const capturePayment = createSagaStep<
     return new StepResponse({ captureId }, { captureId, amount: input.amount });
   },
   compensate: async (data) => {
-    console.log(`Refunded $${data.amount} for capture ${data.captureId}`);
+    if ("captureId" in data) {
+      console.log(`Refunded $${data.amount} for capture ${data.captureId}`);
+    }
   },
 });
 
@@ -79,7 +83,9 @@ const createLabel = createSagaStep<
     return new StepResponse({ labelId }, { labelId });
   },
   compensate: async (data) => {
-    console.log(`Voided shipping label ${data.labelId}`);
+    if ("labelId" in data) {
+      console.log(`Voided shipping label ${data.labelId}`);
+    }
   },
 });
 
@@ -101,7 +107,7 @@ const schedulePickup = createSagaStep<
     return new StepResponse({ pickupId }, { pickupId });
   },
   compensate: async (data) => {
-    if (data.pickupId) {
+    if ("pickupId" in data && data.pickupId) {
       console.log(`Cancelled pickup ${data.pickupId}`);
     }
   },
@@ -133,7 +139,9 @@ const createOrder = createSagaStep<
     return new StepResponse({ orderId }, { orderId });
   },
   compensate: async (data) => {
-    console.log(`Cancelled order ${data.orderId}`);
+    if ("orderId" in data) {
+      console.log(`Cancelled order ${data.orderId}`);
+    }
   },
 });
 

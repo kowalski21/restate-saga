@@ -15,7 +15,7 @@ import {
   StepResponse,
   registerTerminalErrors,
   setGlobalErrorMapper,
-} from "restate-saga";
+} from "../src/index.js";
 
 // ============================================================
 // Custom Error Classes
@@ -153,7 +153,9 @@ const callPaymentService = createSagaStep<
     return new StepResponse({ transactionId }, { transactionId });
   },
   compensate: async (data) => {
-    console.log(`Refunding transaction ${data.transactionId}`);
+    if ("transactionId" in data) {
+      console.log(`Refunding transaction ${data.transactionId}`);
+    }
   },
 });
 
@@ -172,14 +174,18 @@ const processShipping = createSagaStep<
     return new StepResponse({ trackingId }, { trackingId });
   },
   compensate: async (data) => {
-    console.log(`Cancelling shipment ${data.trackingId}`);
+    if ("trackingId" in data) {
+      console.log(`Cancelling shipment ${data.trackingId}`);
+    }
   },
   // Per-step mapper: only applies to this step
-  errorMapper: (err) => {
-    if (err instanceof Error && err.message.includes("blocked")) {
-      return new restate.TerminalError("Shipping address is not allowed");
-    }
-    return undefined;
+  options: {
+    asTerminalError: (err) => {
+      if (err instanceof Error && err.message.includes("blocked")) {
+        return new restate.TerminalError("Shipping address is not allowed");
+      }
+      return undefined;
+    },
   },
 });
 

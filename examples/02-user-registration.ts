@@ -13,7 +13,7 @@ import {
   createSagaStep,
   StepResponse,
   registerTerminalErrors,
-} from "restate-saga";
+} from "../src/index.js";
 
 // Custom error classes
 class ValidationError extends Error {
@@ -69,7 +69,9 @@ const createUser = createSagaStep<
     return new StepResponse({ userId }, { userId });
   },
   compensate: async (data) => {
-    console.log(`Deleted user ${data.userId}`);
+    if ("userId" in data) {
+      console.log(`Deleted user ${data.userId}`);
+    }
   },
 });
 
@@ -86,7 +88,9 @@ const sendWelcomeEmail = createSagaStep<
   },
   // Optional: log that we couldn't unsend the email
   compensate: async (data) => {
-    console.log(`Note: Welcome email to ${data.email} was already sent`);
+    if ("email" in data && typeof data.email === "string") {
+      console.log(`Note: Welcome email to ${data.email} was already sent`);
+    }
   },
 });
 
@@ -108,7 +112,7 @@ const createSubscription = createSagaStep<
     return new StepResponse({ subscriptionId }, { subscriptionId });
   },
   compensate: async (data) => {
-    if (data.subscriptionId) {
+    if ("subscriptionId" in data && data.subscriptionId) {
       console.log(`Cancelled subscription ${data.subscriptionId}`);
     }
   },
