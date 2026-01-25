@@ -173,3 +173,26 @@ export type AnySagaContext = {
   ctx: restate.Context;
   compensations: Array<() => Promise<void>>;
 };
+
+/**
+ * Extracts the base Restate service type from a SagaWorkflowService or SagaVirtualObject.
+ *
+ * Use this when you need a type compatible with the Restate SDK client's
+ * `serviceClient<T>({ name: "..." })` pattern, where you only import the type
+ * (not the implementation).
+ *
+ * @example
+ * ```typescript
+ * // In your workflow file:
+ * export const checkoutWorkflow = createSagaWorkflow(...);
+ * export type CheckoutWorkflow = InferServiceType<typeof checkoutWorkflow>;
+ *
+ * // In your client code (separate package):
+ * import type { CheckoutWorkflow } from "./workflows/checkout";
+ *
+ * const result = await restateClient
+ *   .serviceClient<CheckoutWorkflow>({ name: "CheckoutWorkflow" })
+ *   .run({ ... });
+ * ```
+ */
+export type InferServiceType<T> = Omit<T, "runAsStep">;

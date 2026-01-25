@@ -21,6 +21,7 @@ export type {
   SagaVirtualObjectOptions,
   SagaObjectHandler,
   AnySagaContext,
+  InferServiceType,
 } from "./types.js";
 
 // Error Registry
