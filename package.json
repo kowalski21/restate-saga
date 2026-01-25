@@ -1,0 +1,53 @@
+{
+  "name": "restate-saga",
+  "version": "0.1.0",
+  "description": "Saga pattern implementation for Restate durable workflows with automatic compensation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "peerDependencies": {
+    "@restatedev/restate-sdk": "^1.10.0"
+  },
+  "devDependencies": {
+    "@restatedev/restate-sdk": "^1.10.2",
+    "@restatedev/restate-sdk-clients": "^1.10.2",
+    "@restatedev/restate-sdk-testcontainers": "^1.10.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  },
+  "keywords": [
+    "restate",
+    "saga",
+    "durable-workflows",
+    "distributed-transactions",
+    "compensation",
+    "workflow",
+    "orchestration"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}
