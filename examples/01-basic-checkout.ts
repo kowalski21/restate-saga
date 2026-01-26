@@ -8,11 +8,7 @@
  */
 
 import * as restate from "@restatedev/restate-sdk";
-import {
-  createSagaWorkflow,
-  createSagaStep,
-  StepResponse,
-} from "../src/index.js";
+import { createSagaWorkflow, createSagaStep, StepResponse, InferServiceType } from "../src/index.js";
 
 // Step 1: Reserve inventory
 const reserveInventory = createSagaStep<
@@ -92,7 +88,7 @@ export const checkoutWorkflow = createSagaWorkflow(
       amount: number;
       currency: string;
       address: string;
-    }
+    },
   ) => {
     // Step 1: Reserve inventory
     const inventory = await reserveInventory(saga, {
@@ -118,8 +114,9 @@ export const checkoutWorkflow = createSagaWorkflow(
       paymentId: payment.paymentId,
       trackingNumber: shipment.trackingNumber,
     };
-  }
+  },
 );
 
+export type CheckoutWorkflow = InferServiceType<typeof checkoutWorkflow>;
 // Start the service
 restate.endpoint().bind(checkoutWorkflow).listen(9080);

@@ -186,6 +186,143 @@ const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) =>
 });
 ```
 
+### Calling Restate Services
+
+Saga workflows can call other Restate services, Virtual Objects, and workflows using the typed client helpers.
+
+#### Calling a Restate Service
+
+Use `serviceClient` to call regular Restate services from within a saga step:
+
+```typescript
+import { createSagaStep, StepResponse, serviceClient } from "restate-saga";
+import { inventoryService } from "./services/inventory.js";
+
+const checkAndReserve = createSagaStep({
+  name: "CheckAndReserve",
+  run: async ({ ctx, input }) => {
+    // Call an external Restate service
+    const inventory = serviceClient(ctx, inventoryService);
+    const stock = await inventory.checkStock({ productId: input.productId });
+
+    if (stock.available < input.quantity) {
+      return StepResponse.permanentFailure("Insufficient stock", null);
+    }
+
+    const reservation = await inventory.reserve({
+      productId: input.productId,
+      quantity: input.quantity,
+    });
+
+    return new StepResponse(
+      { reservationId: reservation.id },
+      { reservationId: reservation.id }
+    );
+  },
+  compensate: async (data) => {
+    // Compensation logic...
+  },
+});
+```
+
+#### Calling a Virtual Object
+
+Use `objectClient` to call keyed Virtual Objects:
+
+```typescript
+import { objectClient } from "restate-saga";
+import { walletObject } from "./objects/wallet.js";
+
+const debitWallet = createSagaStep({
+  name: "DebitWallet",
+  run: async ({ ctx, input }) => {
+    // Call a Virtual Object by key
+    const wallet = objectClient(ctx, walletObject, input.userId);
+    const result = await wallet.debit({ amount: input.amount });
+
+    return new StepResponse(
+      { transactionId: result.transactionId },
+      { userId: input.userId, amount: input.amount }
+    );
+  },
+  compensate: async (data) => {
+    // Refund on failure...
+  },
+});
+```
+
+#### Remote Workflow Calls vs runAsStep
+
+There are two ways to call another saga workflow:
+
+| Method | Compensation | Use When |
+|--------|--------------|----------|
+| `workflowClient` | Independent - child handles its own rollback | Workflows should succeed/fail independently |
+| `runAsStep` | Shared - child's compensations join parent | All-or-nothing transaction across workflows |
+
+**Remote call (independent compensation):**
+
+```typescript
+import { workflowClient } from "restate-saga";
+import { notificationWorkflow } from "./workflows/notification.js";
+
+const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) => {
+  const order = await createOrder(saga, input);
+
+  // Remote call - if notification fails, it handles its own compensation
+  // Order workflow continues or fails independently
+  const notifyClient = workflowClient(saga.ctx, notificationWorkflow);
+  await notifyClient.run({ userId: input.userId, message: "Order created" });
+
+  return { orderId: order.id };
+});
+```
+
+**Embedded call (shared compensation):**
+
+```typescript
+import { paymentWorkflow } from "./workflows/payment.js";
+
+const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) => {
+  const order = await createOrder(saga, input);
+
+  // Embedded - payment compensations join this saga's stack
+  // If shipping fails later, payment is also rolled back
+  const payment = await paymentWorkflow.runAsStep(saga, { amount: order.total });
+
+  const shipment = await createShipment(saga, { orderId: order.id });
+
+  return { orderId: order.id, paymentId: payment.paymentId };
+});
+```
+
+#### Fire-and-Forget Calls
+
+Use send clients for async calls that don't wait for completion:
+
+```typescript
+import { serviceSendClient, workflowSendClient, objectSendClient } from "restate-saga";
+
+const completeOrder = createSagaStep({
+  name: "CompleteOrder",
+  run: async ({ ctx, input }) => {
+    // Fire-and-forget: send email notification
+    const emailService = serviceSendClient(ctx, emailService);
+    await emailService.send({ to: input.email, template: "order-complete" });
+
+    // Fire-and-forget: trigger analytics workflow
+    const analytics = workflowSendClient(ctx, analyticsWorkflow);
+    await analytics.run({ event: "order_completed", orderId: input.orderId });
+
+    // Fire-and-forget: update user stats object
+    const userStats = objectSendClient(ctx, userStatsObject, input.userId);
+    await userStats.incrementOrderCount();
+
+    return new StepResponse({ completed: true }, null);
+  },
+});
+```
+
 ### Virtual Objects
 
 Create stateful entities with saga support:
@@ -214,17 +351,21 @@ const wallet = createSagaVirtualObject(
 
 ## External Client Usage
 
-Use `InferServiceType` to create a type-safe client with `@restatedev/restate-sdk-clients`:
+Use `InferServiceType` to create a type-safe client with `@restatedev/restate-sdk-clients`.
+
+See [01-basic-checkout.ts](./examples/01-basic-checkout.ts) for a complete example.
 
 ```typescript
-// workflows/checkout.ts
+// examples/01-basic-checkout.ts
 import { createSagaWorkflow, InferServiceType } from "restate-saga";
 
 export const checkoutWorkflow = createSagaWorkflow(
   "CheckoutWorkflow",
-  async (saga, input: { productId: string; quantity: number }) => {
-    // ... workflow implementation
-    return { orderId: "123" };
+  async (saga, input: { productId: string; quantity: number; amount: number; ... }) => {
+    const inventory = await reserveInventory(saga, { ... });
+    const payment = await chargePayment(saga, { ... });
+    const shipment = await createShipment(saga, { ... });
+    return { reservationId, paymentId, trackingNumber };
   }
 );
 
@@ -235,14 +376,14 @@ export type CheckoutWorkflow = InferServiceType<typeof checkoutWorkflow>;
 ```typescript
 // client.ts
 import * as clients from "@restatedev/restate-sdk-clients";
-import type { CheckoutWorkflow } from "./workflows/checkout.js";
+import type { CheckoutWorkflow } from "./examples/01-basic-checkout.js";
 
 const restateClient = clients.connect({ url: "http://localhost:8080" });
 
 // Type-safe client usage - name is constrained to "CheckoutWorkflow"
 const result = await restateClient
   .serviceClient<CheckoutWorkflow>({ name: "CheckoutWorkflow" })
-  .run({ productId: "SKU123", quantity: 2 });
+  .run({ productId: "89", quantity: 34, amount: 40 });
 
 // TypeScript error if you use the wrong name:
 // .serviceClient<CheckoutWorkflow>({ name: "WrongName" })
@@ -277,9 +418,12 @@ const result = await restateClient
 ### Client Helpers
 
 - `InferServiceType<T>` - Extract service type for use with external clients
-- `workflowClient(ctx, definition)` - Create a typed workflow client
-- `workflowSendClient(ctx, definition)` - Create a fire-and-forget workflow client
-- `objectClient(ctx, definition, key)` - Create a typed object client
+- `serviceClient(ctx, definition)` - Create a typed client for Restate services
+- `serviceSendClient(ctx, definition)` - Create a fire-and-forget client for Restate services
+- `workflowClient(ctx, definition)` - Create a typed client for saga workflows
+- `workflowSendClient(ctx, definition)` - Create a fire-and-forget client for saga workflows
+- `objectClient(ctx, definition, key)` - Create a typed client for Virtual Objects
+- `objectSendClient(ctx, definition, key)` - Create a fire-and-forget client for Virtual Objects
 
 ### Nested Sagas
 
@@ -292,7 +436,7 @@ See the [`examples/`](./examples) directory for complete working examples:
 
 | Example | Description |
 |---------|-------------|
-| [01-basic-checkout.ts](./examples/01-basic-checkout.ts) | Simple e-commerce checkout with multi-step compensation |
+| [01-basic-checkout.ts](./examples/01-basic-checkout.ts) | Simple e-commerce checkout with multi-step compensation and `InferServiceType` usage |
 | [02-user-registration.ts](./examples/02-user-registration.ts) | Registration flow with validation and optional compensation |
 | [03-composed-workflows.ts](./examples/03-composed-workflows.ts) | Workflow composition using `runAsStep` |
 | [04-virtual-object.ts](./examples/04-virtual-object.ts) | Stateful wallet entity with saga support |
