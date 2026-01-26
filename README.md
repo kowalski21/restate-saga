@@ -1,4 +1,4 @@
-# restate-saga
+# @kowalski21/restate-saga
 
 Saga pattern implementation for [Restate](https://restate.dev/) durable workflows with automatic compensation.
 
@@ -14,7 +14,7 @@ Saga pattern implementation for [Restate](https://restate.dev/) durable workflow
 ## Installation
 
 ```bash
-npm install restate-saga
+npm install @kowalski21/restate-saga
 ```
 
 **Peer dependency:** Requires `@restatedev/restate-sdk` ^1.10.0
@@ -26,7 +26,7 @@ import {
   createSagaWorkflow,
   createSagaStep,
   StepResponse,
-} from "restate-saga";
+} from "@kowalski21/restate-saga";
 
 // Define a step with compensation
 const reserveInventory = createSagaStep({
@@ -146,7 +146,7 @@ const validateInput = createSagaStep({
 Register error classes that should always trigger compensation without retrying:
 
 ```typescript
-import { registerTerminalErrors } from "restate-saga";
+import { registerTerminalErrors } from "@kowalski21/restate-saga";
 
 class ValidationError extends Error {}
 class NotFoundError extends Error {}
@@ -195,7 +195,7 @@ Saga workflows can call other Restate services, Virtual Objects, and workflows u
 Use `serviceClient` to call regular Restate services from within a saga step:
 
 ```typescript
-import { createSagaStep, StepResponse, serviceClient } from "restate-saga";
+import { createSagaStep, StepResponse, serviceClient } from "@kowalski21/restate-saga";
 import { inventoryService } from "./services/inventory.js";
 
 const checkAndReserve = createSagaStep({
@@ -230,7 +230,7 @@ const checkAndReserve = createSagaStep({
 Use `objectClient` to call keyed Virtual Objects:
 
 ```typescript
-import { objectClient } from "restate-saga";
+import { objectClient } from "@kowalski21/restate-saga";
 import { walletObject } from "./objects/wallet.js";
 
 const debitWallet = createSagaStep({
@@ -263,7 +263,7 @@ There are two ways to call another saga workflow:
 **Remote call (independent compensation):**
 
 ```typescript
-import { workflowClient } from "restate-saga";
+import { workflowClient } from "@kowalski21/restate-saga";
 import { notificationWorkflow } from "./workflows/notification.js";
 
 const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) => {
@@ -301,7 +301,7 @@ const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) =>
 Use send clients for async calls that don't wait for completion:
 
 ```typescript
-import { serviceSendClient, workflowSendClient, objectSendClient } from "restate-saga";
+import { serviceSendClient, workflowSendClient, objectSendClient } from "@kowalski21/restate-saga";
 
 const completeOrder = createSagaStep({
   name: "CompleteOrder",
@@ -328,7 +328,7 @@ const completeOrder = createSagaStep({
 Create stateful entities with saga support:
 
 ```typescript
-import { createSagaVirtualObject } from "restate-saga";
+import { createSagaVirtualObject } from "@kowalski21/restate-saga";
 
 const wallet = createSagaVirtualObject(
   "Wallet",
@@ -357,7 +357,7 @@ See [01-basic-checkout.ts](./examples/01-basic-checkout.ts) for a complete examp
 
 ```typescript
 // examples/01-basic-checkout.ts
-import { createSagaWorkflow, InferServiceType } from "restate-saga";
+import { createSagaWorkflow, InferServiceType } from "@kowalski21/restate-saga";
 
 export const checkoutWorkflow = createSagaWorkflow(
   "CheckoutWorkflow",

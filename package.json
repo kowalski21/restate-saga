@@ -1,5 +1,5 @@
 {
-  "name": "restate-saga",
+  "name": "@kowalski21/restate-saga",
   "version": "0.1.0",
   "description": "Saga pattern implementation for Restate durable workflows with automatic compensation",
   "type": "module",
@@ -46,7 +46,7 @@
     "workflow",
     "orchestration"
   ],
-  "author": "",
+  "author": "Douglas Amoo-Sargon",
   "license": "MIT",
   "repository": {
     "type": "git",
