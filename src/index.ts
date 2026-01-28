@@ -57,3 +57,28 @@ export {
 
 // Nested Sagas
 export { runNestedSaga, createSagaModule } from "./nested.js";
+
+// Container / Dependency Injection (Awilix)
+export type {
+  ContainerSagaContext,
+  ContainerWorkflowContext,
+  AnyContainerSagaContext,
+  ContainerStepConfig,
+  ContainerWorkflowService,
+  ContainerRestateWorkflowService,
+  // Type inference helpers
+  InferContainerServiceType,
+  InferContainerCradle,
+  InferContainerInput,
+  InferContainerOutput,
+  InferContainerName,
+  InferContainerWorkflow,
+} from "./container.js";
+export {
+  createContainerStep,
+  createContainerStepStrict,
+  createContainerWorkflow,
+  createContainerRestateWorkflow,
+  defineContainerWorkflow,
+  defineContainerRestateWorkflow,
+} from "./container.js";

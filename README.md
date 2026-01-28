@@ -9,7 +9,8 @@ Saga pattern implementation for [Restate](https://restate.dev/) durable workflow
 - **Global error registry** - Register error classes that should always trigger compensation
 - **Composable workflows** - Embed workflows within workflows using `runAsStep`
 - **Virtual Object support** - Saga pattern for stateful keyed entities
-- **Type-safe** - Full TypeScript support with type inference
+- **Dependency Injection** - Container-aware workflows with Awilix for per-request contexts (Directus, etc.)
+- **Type-safe** - Full TypeScript support with type inference helpers
 
 ## Installation
 
@@ -390,6 +391,286 @@ const result = await restateClient
 // Error: Type '"WrongName"' is not assignable to type '"CheckoutWorkflow"'
 ```
 
+## Container-Aware Workflows (Dependency Injection)
+
+For applications like Directus where services need per-request context (accountability, schema), use the container-aware workflow pattern with Awilix.
+
+### Basic Container Workflow
+
+```typescript
+import { createContainer, asValue } from "awilix";
+import {
+  createContainerWorkflow,
+  createContainerStep,
+  StepResponse,
+} from "@kowalski21/restate-saga";
+
+// 1. Define your services type
+interface AppServices {
+  ordersService: ItemsService;
+  inventoryService: ItemsService;
+  database: Knex;
+}
+
+// 2. Create container-aware steps
+const createOrder = createContainerStep<AppServices>()({
+  name: "CreateOrder",
+  run: async (saga, input: { userId: string; items: any[] }) => {
+    // saga.services is typed and available
+    const orderId = await saga.services.ordersService.createOne({
+      user: input.userId,
+      items: input.items,
+    });
+    return new StepResponse({ orderId }, { orderId });
+  },
+  compensate: async (saga, data) => {
+    // saga.services available in compensation too
+    if ("orderId" in data) {
+      await saga.services.ordersService.deleteOne(data.orderId);
+    }
+  },
+});
+
+// 3. Create and configure container
+const container = createContainer<AppServices>();
+container.register({
+  ordersService: asValue(new ItemsService("orders", context)),
+  inventoryService: asValue(new ItemsService("inventory", context)),
+  database: asValue(knex),
+});
+
+// 4. Create workflow with container
+const orderWorkflow = createContainerWorkflow(
+  container,
+  "OrderWorkflow",
+  async (saga, input: { userId: string; items: any[] }) => {
+    const order = await createOrder(saga, input);
+    return { orderId: order.orderId };
+  }
+);
+
+// 5. Register with Restate
+restate.endpoint().bind(orderWorkflow).listen();
+```
+
+### Factory Pattern (Per-Request Containers)
+
+For Directus where each request has different accountability/schema, use the factory pattern:
+
+```typescript
+import {
+  defineContainerWorkflow,
+  defineContainerRestateWorkflow,
+  createContainerStep,
+  StepResponse,
+} from "@kowalski21/restate-saga";
+
+// Define your services type
+interface DirectusServices {
+  ordersService: ItemsService;
+  customersService: ItemsService;
+  paymentsService: ItemsService;
+}
+
+// Define steps (reusable across all requests)
+const createOrder = createContainerStep<DirectusServices>()({
+  name: "CreateOrder",
+  run: async (saga, input: { customerId: string; items: any[] }) => {
+    const order = await saga.services.ordersService.createOne({
+      customer: input.customerId,
+      items: input.items,
+      status: "pending",
+    });
+    return new StepResponse({ orderId: order.id }, { orderId: order.id });
+  },
+  compensate: async (saga, data) => {
+    if ("orderId" in data) {
+      await saga.services.ordersService.deleteOne(data.orderId);
+    }
+  },
+});
+
+const processPayment = createContainerStep<DirectusServices>()({
+  name: "ProcessPayment",
+  run: async (saga, input: { orderId: string; amount: number }) => {
+    const payment = await saga.services.paymentsService.createOne({
+      order: input.orderId,
+      amount: input.amount,
+      status: "completed",
+    });
+    return new StepResponse({ paymentId: payment.id }, { paymentId: payment.id });
+  },
+  compensate: async (saga, data) => {
+    if ("paymentId" in data) {
+      await saga.services.paymentsService.updateOne(data.paymentId, {
+        status: "refunded",
+      });
+    }
+  },
+});
+
+// Define workflow factory (no container bound yet)
+const createOrderWorkflow = defineContainerWorkflow<DirectusServices>()(
+  "OrderWorkflow",
+  async (saga, input: { customerId: string; items: any[]; amount: number }) => {
+    const order = await createOrder(saga, {
+      customerId: input.customerId,
+      items: input.items,
+    });
+
+    const payment = await processPayment(saga, {
+      orderId: order.orderId,
+      amount: input.amount,
+    });
+
+    return { orderId: order.orderId, paymentId: payment.paymentId };
+  }
+);
+
+// In Directus endpoint - create with request-specific container
+export default defineEndpoint((router, context) => {
+  router.post("/orders", async (req, res) => {
+    const { accountability, schema } = req;
+
+    // Create container with request-specific services
+    const container = createContainer<DirectusServices>();
+    container.register({
+      ordersService: asValue(new ItemsService("orders", { schema, accountability, knex: context.database })),
+      customersService: asValue(new ItemsService("customers", { schema, accountability, knex: context.database })),
+      paymentsService: asValue(new ItemsService("payments", { schema, accountability, knex: context.database })),
+    });
+
+    // Create workflow instance with this container
+    const workflow = createOrderWorkflow(container);
+
+    // Register with Restate
+    restate.endpoint().bind(workflow).listen(9080);
+
+    // Or invoke via Restate client
+    const client = restate.connect({ url: "http://localhost:8080" });
+    const result = await client.serviceClient(workflow).run(req.body);
+
+    res.json(result);
+  });
+});
+```
+
+### Nested Container Workflows
+
+When using `runAsStep`, nested workflows inherit the parent's saga context (including services):
+
+```typescript
+// Define payment workflow factory
+const createPaymentWorkflow = defineContainerWorkflow<DirectusServices>()(
+  "PaymentWorkflow",
+  async (saga, input: { orderId: string; amount: number }) => {
+    const payment = await processPayment(saga, input);
+    return { paymentId: payment.paymentId };
+  }
+);
+
+// Define order workflow that nests payment
+const createOrderWorkflow = defineContainerWorkflow<DirectusServices>()(
+  "OrderWorkflow",
+  async (saga, input) => {
+    const order = await createOrder(saga, input);
+
+    // Get payment workflow instance (must be created with same container)
+    // Note: paymentWorkflow must be in scope - see setup below
+    const payment = await paymentWorkflow.runAsStep(saga, {
+      orderId: order.orderId,
+      amount: input.amount,
+    });
+
+    return { orderId: order.orderId, paymentId: payment.paymentId };
+  }
+);
+
+// Setup: create both workflows with same container
+router.post("/orders", async (req, res) => {
+  const container = createRequestContainer(req);
+
+  // Create both with same container
+  const paymentWorkflow = createPaymentWorkflow(container);
+  const orderWorkflow = createOrderWorkflow(container);
+
+  // Register both
+  restate.endpoint()
+    .bind(orderWorkflow)
+    .bind(paymentWorkflow)
+    .listen(9080);
+});
+```
+
+**Important:** When using `runAsStep`, the nested workflow uses the parent's saga context. The container used to create the nested workflow only matters when invoked directly via Restate.
+
+### Type Inference Helpers
+
+Extract types from container workflows for use with clients:
+
+```typescript
+import {
+  InferContainerServiceType,
+  InferContainerCradle,
+  InferContainerInput,
+  InferContainerOutput,
+  InferContainerWorkflow,
+} from "@kowalski21/restate-saga";
+
+const orderWorkflow = createContainerWorkflow(container, "OrderWorkflow", handler);
+
+// Individual type extraction
+type OrderService = InferContainerServiceType<typeof orderWorkflow>;
+type OrderCradle = InferContainerCradle<typeof orderWorkflow>;
+type OrderInput = InferContainerInput<typeof orderWorkflow>;
+type OrderOutput = InferContainerOutput<typeof orderWorkflow>;
+
+// Or get all at once
+type Order = InferContainerWorkflow<typeof orderWorkflow>;
+// Order.Name       = "OrderWorkflow"
+// Order.Input      = { customerId: string; items: any[]; amount: number }
+// Order.Output     = { orderId: string; paymentId: string }
+// Order.Cradle     = DirectusServices
+// Order.ServiceType = restate.ServiceDefinition<"OrderWorkflow", ...>
+
+// Use with Restate client
+const result = await client
+  .serviceClient<OrderService>({ name: "OrderWorkflow" })
+  .run(input);
+```
+
+### Restate Workflows (Long-Running)
+
+For long-running workflows with signals and queries:
+
+```typescript
+const createLongRunningWorkflow = defineContainerRestateWorkflow<DirectusServices>()(
+  "ApprovalWorkflow",
+  async (saga, ctx, input: { orderId: string }) => {
+    const order = await createOrder(saga, input);
+
+    // Wait for approval signal (durable promise)
+    const approved = await ctx.promise<boolean>("approval");
+
+    if (!approved) {
+      throw new restate.TerminalError("Order rejected");
+    }
+
+    const shipment = await createShipment(saga, { orderId: order.orderId });
+    return { orderId: order.orderId, shipmentId: shipment.id };
+  },
+  {
+    // Additional handlers (signals/queries)
+    approve: async (ctx, input: { approved: boolean }) => {
+      ctx.resolvePromise("approval", input.approved);
+    },
+    getStatus: async (ctx) => {
+      return ctx.promise<string>("status");
+    },
+  }
+);
+```
+
 ## API Reference
 
 ### Steps
@@ -425,6 +706,24 @@ const result = await restateClient
 - `objectClient(ctx, definition, key)` - Create a typed client for Virtual Objects
 - `objectSendClient(ctx, definition, key)` - Create a fire-and-forget client for Virtual Objects
 
+### Container / Dependency Injection (Awilix)
+
+- `createContainerStep<TCradle>()` - Create a step with DI support
+- `createContainerStepStrict<TCradle>()` - Create a strict step with DI support
+- `createContainerWorkflow(container, name, handler, options?)` - Create a workflow with container
+- `createContainerRestateWorkflow(container, name, run, handlers?, options?)` - Create a Restate Workflow with container
+- `defineContainerWorkflow<TCradle>()` - Factory pattern for per-request containers
+- `defineContainerRestateWorkflow<TCradle>()` - Factory pattern for per-request Restate Workflows
+
+### Container Type Helpers
+
+- `InferContainerServiceType<T>` - Extract Restate service type for clients
+- `InferContainerCradle<T>` - Extract the services (TCradle) type
+- `InferContainerInput<T>` - Extract workflow input type
+- `InferContainerOutput<T>` - Extract workflow output type
+- `InferContainerName<T>` - Extract workflow name literal
+- `InferContainerWorkflow<T>` - Extract all types as an object
+
 ### Nested Sagas
 
 - `runNestedSaga(saga, handler)` - Run inline saga logic with shared compensation
@@ -442,6 +741,8 @@ See the [`examples/`](./examples) directory for complete working examples:
 | [04-virtual-object.ts](./examples/04-virtual-object.ts) | Stateful wallet entity with saga support |
 | [05-strict-compensation.ts](./examples/05-strict-compensation.ts) | Hybrid vs strict compensation modes |
 | [06-error-handling.ts](./examples/06-error-handling.ts) | Error registry, mappers, and handling strategies |
+| [07-container-workflow.ts](./examples/07-container-workflow.ts) | Container-aware workflows with Awilix DI |
+| [08-directus-factory.ts](./examples/08-directus-factory.ts) | Factory pattern for Directus per-request containers |
 
 To run an example:
 
