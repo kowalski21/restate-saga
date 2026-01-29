@@ -66,13 +66,21 @@ export type {
   ContainerStepConfig,
   ContainerWorkflowService,
   ContainerRestateWorkflowService,
-  // Type inference helpers
+  // Type inference helpers (for createContainerWorkflow)
   InferContainerServiceType,
   InferContainerCradle,
   InferContainerInput,
   InferContainerOutput,
   InferContainerName,
   InferContainerWorkflow,
+  // Type inference helpers (for defineContainerWorkflow factory pattern)
+  InferFactoryWorkflow,
+  InferFactoryServiceType,
+  InferFactoryInput,
+  InferFactoryOutput,
+  InferFactoryName,
+  InferFactoryCradle,
+  InferFactory,
 } from "./container.js";
 export {
   createContainerStep,

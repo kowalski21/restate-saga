@@ -170,6 +170,113 @@ export type InferContainerWorkflow<T> = {
   ServiceType: InferContainerServiceType<T>;
 };
 
+// =============================================================================
+// Factory Type Inference Helpers
+// =============================================================================
+
+/**
+ * Extracts the workflow instance type from a factory function created by
+ * `defineContainerWorkflow` or `defineContainerRestateWorkflow`.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(
+ *   "OrderWorkflow",
+ *   async (saga, input) => { ... }
+ * );
+ *
+ * // Extract the instantiated workflow type
+ * type OrderWorkflowInstance = InferFactoryWorkflow<typeof createOrderWorkflow>;
+ * ```
+ */
+export type InferFactoryWorkflow<T> = T extends (container: any) => infer W ? W : never;
+
+/**
+ * Extracts the Restate service type from a factory function for use with
+ * `serviceClient<T>({ name: "..." })`.
+ *
+ * This is the primary type helper for calling factory-defined workflows from clients.
+ *
+ * @example
+ * ```typescript
+ * // Define workflow with factory pattern
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(
+ *   "OrderWorkflow",
+ *   async (saga, input: OrderInput): Promise<OrderOutput> => { ... }
+ * );
+ *
+ * // Export the service type for clients
+ * export type OrderWorkflow = InferFactoryServiceType<typeof createOrderWorkflow>;
+ *
+ * // In client code:
+ * const result = await restateClient
+ *   .serviceClient<OrderWorkflow>({ name: "OrderWorkflow" })
+ *   .run({ userId: "123", items: [] });
+ * ```
+ */
+export type InferFactoryServiceType<T> = InferContainerServiceType<InferFactoryWorkflow<T>>;
+
+/**
+ * Extracts the Input type from a factory function.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(...);
+ * type OrderInput = InferFactoryInput<typeof createOrderWorkflow>;
+ * ```
+ */
+export type InferFactoryInput<T> = InferContainerInput<InferFactoryWorkflow<T>>;
+
+/**
+ * Extracts the Output type from a factory function.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(...);
+ * type OrderOutput = InferFactoryOutput<typeof createOrderWorkflow>;
+ * ```
+ */
+export type InferFactoryOutput<T> = InferContainerOutput<InferFactoryWorkflow<T>>;
+
+/**
+ * Extracts the workflow name from a factory function.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(...);
+ * type Name = InferFactoryName<typeof createOrderWorkflow>; // "OrderWorkflow"
+ * ```
+ */
+export type InferFactoryName<T> = InferContainerName<InferFactoryWorkflow<T>>;
+
+/**
+ * Extracts the TCradle (services) type from a factory function.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(...);
+ * type Services = InferFactoryCradle<typeof createOrderWorkflow>; // AppServices
+ * ```
+ */
+export type InferFactoryCradle<T> = InferContainerCradle<InferFactoryWorkflow<T>>;
+
+/**
+ * Utility type that extracts all type information from a factory function.
+ *
+ * @example
+ * ```typescript
+ * const createOrderWorkflow = defineContainerWorkflow<AppServices>()(...);
+ * type Info = InferFactory<typeof createOrderWorkflow>;
+ *
+ * // Info.Name = "OrderWorkflow"
+ * // Info.Input = { userId: string; items: any[] }
+ * // Info.Output = { orderId: string }
+ * // Info.Cradle = AppServices
+ * // Info.ServiceType = restate.ServiceDefinition<"OrderWorkflow", ...>
+ * ```
+ */
+export type InferFactory<T> = InferContainerWorkflow<InferFactoryWorkflow<T>>;
+
 /**
  * Convert StepRetryPolicy to Restate RunOptions format.
  * @internal
