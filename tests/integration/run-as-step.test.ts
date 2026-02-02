@@ -1,4 +1,10 @@
-// @ts-nocheck - SagaWorkflowService type is incompatible with SDK client types
+/**
+ * Integration tests for runAsStep functionality.
+ *
+ * Note: These tests demonstrate composing workflows using runAsStep.
+ * Type assertions are used where the hybrid compensation pattern creates
+ * union types (Input | CompensationData).
+ */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { RestateTestEnvironment } from "@restatedev/restate-sdk-testcontainers";
 import * as clients from "@restatedev/restate-sdk-clients";
@@ -6,12 +12,13 @@ import {
   createSagaWorkflow,
   createSagaStep,
   StepResponse,
+  type InferServiceType,
 } from "../../src/index.js";
 
 // Track compensation calls
 const compensationLog: string[] = [];
 
-// Payment workflow steps
+// Payment workflow steps - using type guards for compensation data
 const authorizePayment = createSagaStep<
   { amount: number },
   { authId: string },
@@ -23,7 +30,10 @@ const authorizePayment = createSagaStep<
     return new StepResponse({ authId }, { authId });
   },
   compensate: async (data) => {
-    compensationLog.push(`void:${data.authId}`);
+    // Type guard for hybrid compensation pattern
+    if ("authId" in data) {
+      compensationLog.push(`void:${data.authId}`);
+    }
   },
 });
 
@@ -38,7 +48,10 @@ const capturePayment = createSagaStep<
     return new StepResponse({ captureId }, { captureId, amount: input.amount });
   },
   compensate: async (data) => {
-    compensationLog.push(`refund:${data.captureId}:${data.amount}`);
+    // Type guard for hybrid compensation pattern
+    if ("captureId" in data) {
+      compensationLog.push(`refund:${data.captureId}:${data.amount}`);
+    }
   },
 });
 
@@ -54,6 +67,7 @@ const paymentWorkflow = createSagaWorkflow(
     return { paymentId: capture.captureId };
   }
 );
+type PaymentWorkflowService = InferServiceType<typeof paymentWorkflow>;
 
 // Order workflow steps
 const createOrder = createSagaStep<
@@ -67,7 +81,9 @@ const createOrder = createSagaStep<
     return new StepResponse({ orderId }, { orderId });
   },
   compensate: async (data) => {
-    compensationLog.push(`cancel:${data.orderId}`);
+    if ("orderId" in data) {
+      compensationLog.push(`cancel:${data.orderId}`);
+    }
   },
 });
 
@@ -87,7 +103,7 @@ const shipOrder = createSagaStep<
     return new StepResponse({ shipmentId }, { shipmentId });
   },
   compensate: async (data) => {
-    if (data.shipmentId) {
+    if ("shipmentId" in data && data.shipmentId) {
       compensationLog.push(`cancelShipment:${data.shipmentId}`);
     }
   },
@@ -121,6 +137,7 @@ const orderWorkflow = createSagaWorkflow(
     };
   }
 );
+type OrderWorkflowService = InferServiceType<typeof orderWorkflow>;
 
 describe("runAsStep Integration", () => {
   let restateTestEnvironment: RestateTestEnvironment;
@@ -142,7 +159,9 @@ describe("runAsStep Integration", () => {
   describe("Standalone workflow", () => {
     it("should execute payment workflow independently", async () => {
       compensationLog.length = 0;
-      const client = restateIngress.serviceClient(paymentWorkflow);
+      const client = restateIngress.serviceClient<PaymentWorkflowService>({
+        name: "PaymentWorkflow",
+      });
 
       const result = await client.run({ amount: 100 });
 
@@ -154,7 +173,9 @@ describe("runAsStep Integration", () => {
   describe("Workflow as step", () => {
     it("should complete order with embedded payment workflow", async () => {
       compensationLog.length = 0;
-      const client = restateIngress.serviceClient(orderWorkflow);
+      const client = restateIngress.serviceClient<OrderWorkflowService>({
+        name: "OrderWorkflow",
+      });
 
       const result = await client.run({
         customerId: "cust_123",
@@ -170,7 +191,9 @@ describe("runAsStep Integration", () => {
 
     it("should compensate payment workflow when shipping fails", async () => {
       compensationLog.length = 0;
-      const client = restateIngress.serviceClient(orderWorkflow);
+      const client = restateIngress.serviceClient<OrderWorkflowService>({
+        name: "OrderWorkflow",
+      });
 
       await expect(
         client.run({

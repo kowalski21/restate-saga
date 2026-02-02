@@ -9,6 +9,7 @@ import type {
   StepRetryPolicy,
   WorkflowRetryPolicy,
   AnySagaContext,
+  RestateRunOptions,
 } from "./types.js";
 import { StepResponse } from "./steps.js";
 import { resolveTerminalError } from "./error-registry.js";
@@ -281,7 +282,7 @@ export type InferFactory<T> = InferContainerWorkflow<InferFactoryWorkflow<T>>;
  * Convert StepRetryPolicy to Restate RunOptions format.
  * @internal
  */
-function toRunOptions(policy?: StepRetryPolicy): object | undefined {
+function toRunOptions(policy?: StepRetryPolicy): RestateRunOptions | undefined {
   if (!policy) return undefined;
 
   return {
@@ -291,6 +292,23 @@ function toRunOptions(policy?: StepRetryPolicy): object | undefined {
     retryIntervalFactor: policy.retryIntervalFactor,
     maxRetryInterval: policy.maxRetryInterval,
   };
+}
+
+/**
+ * Helper to call ctx.run with optional run options.
+ * This avoids TypeScript issues with passing undefined as the third parameter.
+ * @internal
+ */
+async function runWithOptions<T>(
+  ctx: restate.Context,
+  name: string,
+  fn: () => Promise<T>,
+  options?: RestateRunOptions
+): Promise<T> {
+  if (options) {
+    return ctx.run(name, fn, options);
+  }
+  return ctx.run(name, fn);
 }
 
 /**
@@ -402,17 +420,19 @@ export function createContainerStep<TCradle extends object>() {
         const compensateFn = config.compensate;
         compensations.push(async () => {
           const data = compensationData !== undefined ? compensationData : input;
-          await ctx.run(
+          await runWithOptions(
+            ctx,
             `compensate:${config.name}`,
             // Compensation also gets the saga context with services
             () => compensateFn(saga, data as CompensationData | Input, { failed: stepFailed }),
-            compensationRunOptions as any
+            compensationRunOptions
           );
         });
       }
 
       // 2️⃣ Execute forward action with retry options and error mapping
-      const response = await ctx.run(
+      const response = await runWithOptions(
+        ctx,
         config.name,
         async () => {
           try {
@@ -425,7 +445,7 @@ export function createContainerStep<TCradle extends object>() {
             throw err;
           }
         },
-        runOptions as any
+        runOptions
       );
 
       // 3️⃣ Capture compensation data
@@ -486,7 +506,8 @@ export function createContainerStepStrict<TCradle extends object>() {
       const { ctx, compensations } = saga;
 
       // 1️⃣ Execute forward action FIRST
-      const response = await ctx.run(
+      const response = await runWithOptions(
+        ctx,
         config.name,
         async () => {
           try {
@@ -499,7 +520,7 @@ export function createContainerStepStrict<TCradle extends object>() {
             throw err;
           }
         },
-        runOptions as any
+        runOptions
       );
 
       // 2️⃣ If permanentFailure, throw without registering compensation
@@ -511,10 +532,11 @@ export function createContainerStepStrict<TCradle extends object>() {
       if (config.compensate) {
         const compensateFn = config.compensate;
         compensations.push(() =>
-          ctx.run(
+          runWithOptions(
+            ctx,
             `compensate:${config.name}`,
             () => compensateFn(saga, response.compensationData),
-            compensationRunOptions as any
+            compensationRunOptions
           )
         );
       }

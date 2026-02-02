@@ -1,4 +1,5 @@
 import * as restate from "@restatedev/restate-sdk";
+import type { RestateServiceDefinition, RestateObjectDefinition } from "./types.js";
 
 /**
  * Type helper to extract input type from a saga workflow.
@@ -50,8 +51,15 @@ export type WorkflowOutput<T> = T extends {
  * const result = await client.run({ amount: 100, customerId: "123" });
  * ```
  */
-export function workflowClient<T>(ctx: restate.Context, definition: T) {
-  return ctx.serviceClient(definition as any);
+export function workflowClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T
+) {
+  // Cast required: Restate SDK's serviceClient expects internal ServiceDefinitionFrom type,
+  // but SagaWorkflowService extends the base ServiceDefinition with runAsStep capability.
+  // The cast preserves runtime behavior while the generic constraint ensures type safety for callers.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.serviceClient(definition as any) as restate.Client<T["handlers"]>;
 }
 
 /**
@@ -70,8 +78,12 @@ export function workflowClient<T>(ctx: restate.Context, definition: T) {
  * await client.run({ userId: "123", message: "Hello" });
  * ```
  */
-export function workflowSendClient<T>(ctx: restate.Context, definition: T) {
-  return ctx.serviceSendClient(definition as any);
+export function workflowSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.serviceSendClient(definition as any) as restate.SendClient<T["handlers"]>;
 }
 
 /**
@@ -89,8 +101,12 @@ export function workflowSendClient<T>(ctx: restate.Context, definition: T) {
  * const stock = await client.checkStock({ productId: "abc" });
  * ```
  */
-export function serviceClient<T>(ctx: restate.Context, definition: T) {
-  return ctx.serviceClient(definition as any);
+export function serviceClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.serviceClient(definition as any) as restate.Client<T["handlers"]>;
 }
 
 /**
@@ -100,8 +116,12 @@ export function serviceClient<T>(ctx: restate.Context, definition: T) {
  * @param definition - The service definition
  * @returns A typed send client
  */
-export function serviceSendClient<T>(ctx: restate.Context, definition: T) {
-  return ctx.serviceSendClient(definition as any);
+export function serviceSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.serviceSendClient(definition as any) as restate.SendClient<T["handlers"]>;
 }
 
 /**
@@ -120,8 +140,13 @@ export function serviceSendClient<T>(ctx: restate.Context, definition: T) {
  * const balance = await wallet.getBalance();
  * ```
  */
-export function objectClient<T>(ctx: restate.Context, definition: T, key: string) {
-  return ctx.objectClient(definition as any, key);
+export function objectClient<T extends RestateObjectDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key: string
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.objectClient(definition as any, key) as restate.Client<T["handlers"]>;
 }
 
 /**
@@ -132,6 +157,11 @@ export function objectClient<T>(ctx: restate.Context, definition: T, key: string
  * @param key - The object key (entity ID)
  * @returns A typed send client
  */
-export function objectSendClient<T>(ctx: restate.Context, definition: T, key: string) {
-  return ctx.objectSendClient(definition as any, key);
+export function objectSendClient<T extends RestateObjectDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key: string
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ctx.objectSendClient(definition as any, key) as restate.SendClient<T["handlers"]>;
 }

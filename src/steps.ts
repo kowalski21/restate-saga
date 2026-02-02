@@ -1,12 +1,12 @@
 import * as restate from "@restatedev/restate-sdk";
-import type { SagaContext, SagaStepOptions, StepRetryPolicy } from "./types.js";
+import type { SagaContext, SagaStepOptions, StepRetryPolicy, RestateRunOptions } from "./types.js";
 import { resolveTerminalError } from "./error-registry.js";
 
 /**
  * Convert StepRetryPolicy to Restate RunOptions format.
  * @internal
  */
-function toRunOptions(policy?: StepRetryPolicy): object | undefined {
+function toRunOptions(policy?: StepRetryPolicy): RestateRunOptions | undefined {
   if (!policy) return undefined;
 
   return {
@@ -16,6 +16,23 @@ function toRunOptions(policy?: StepRetryPolicy): object | undefined {
     retryIntervalFactor: policy.retryIntervalFactor,
     maxRetryInterval: policy.maxRetryInterval,
   };
+}
+
+/**
+ * Helper to call ctx.run with optional run options.
+ * This avoids TypeScript issues with passing undefined as the third parameter.
+ * @internal
+ */
+async function runWithOptions<T>(
+  ctx: restate.Context,
+  name: string,
+  fn: () => Promise<T>,
+  options?: RestateRunOptions
+): Promise<T> {
+  if (options) {
+    return ctx.run(name, fn, options);
+  }
+  return ctx.run(name, fn);
 }
 
 /**
@@ -89,12 +106,16 @@ export class StepResponse<Output, CompensationData> {
     message: string,
     compensationData: C
   ): StepResponse<never, C> {
-    const response = Object.create(StepResponse.prototype) as StepResponse<never, C>;
-    (response as any).output = undefined;
-    (response as any).compensationData = compensationData;
-    (response as any).failed = true;
-    (response as any).errorMessage = message;
-    return response;
+    // Create instance without constructor to avoid requiring output parameter.
+    // Cast to writable version for assignment, then return as readonly.
+    const response = Object.create(StepResponse.prototype) as {
+      -readonly [K in keyof StepResponse<never, C>]: StepResponse<never, C>[K];
+    };
+    response.output = undefined as never;
+    response.compensationData = compensationData;
+    response.failed = true;
+    response.errorMessage = message;
+    return response as StepResponse<never, C>;
   }
 }
 
@@ -177,16 +198,18 @@ export function createSagaStep<Input, Output, CompensationData = Input>(opts: {
       const compensateFn = opts.compensate; // Capture for closure
       compensations.push(async () => {
         const data = compensationData !== undefined ? compensationData : input;
-        await ctx.run(
+        await runWithOptions(
+          ctx,
           `compensate:${opts.name}`,
           () => compensateFn(data as CompensationData | Input, { failed: stepFailed }),
-          compensationRunOptions as any
+          compensationRunOptions
         );
       });
     }
 
     // 2️⃣ Execute forward action with retry options and error mapping
-    const response = await ctx.run(
+    const response = await runWithOptions(
+      ctx,
       opts.name,
       async () => {
         try {
@@ -200,7 +223,7 @@ export function createSagaStep<Input, Output, CompensationData = Input>(opts: {
           throw err;
         }
       },
-      runOptions as any
+      runOptions
     );
 
     // 3️⃣ Capture compensation data (available for both success and permanentFailure)
@@ -279,7 +302,8 @@ export function createSagaStepStrict<Input, Output, CompensationData>(opts: {
     const { ctx, compensations } = saga;
 
     // 1️⃣ Execute forward action FIRST with retry options and error mapping
-    const response = await ctx.run(
+    const response = await runWithOptions(
+      ctx,
       opts.name,
       async () => {
         try {
@@ -293,7 +317,7 @@ export function createSagaStepStrict<Input, Output, CompensationData>(opts: {
           throw err;
         }
       },
-      runOptions as any
+      runOptions
     );
 
     // 2️⃣ If permanentFailure, throw without registering compensation
@@ -305,10 +329,11 @@ export function createSagaStepStrict<Input, Output, CompensationData>(opts: {
     if (opts.compensate) {
       const compensateFn = opts.compensate; // Capture for closure
       compensations.push(() =>
-        ctx.run(
+        runWithOptions(
+          ctx,
           `compensate:${opts.name}`,
           () => compensateFn(response.compensationData),
-          compensationRunOptions as any
+          compensationRunOptions
         )
       );
     }

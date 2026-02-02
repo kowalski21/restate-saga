@@ -22,6 +22,7 @@ export type {
   SagaObjectHandler,
   AnySagaContext,
   InferServiceType,
+  InferObjectType,
 } from "./types.js";
 
 // Error Registry
