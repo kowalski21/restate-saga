@@ -198,3 +198,62 @@ export type AnySagaContext = {
 export type InferServiceType<T> = T extends { handlers: infer H; name: infer N extends string }
   ? restate.ServiceDefinition<N, H>
   : never;
+
+/**
+ * Extracts the base Restate virtual object type from a SagaVirtualObject.
+ *
+ * Use this when you need a type compatible with the Restate SDK client's
+ * `objectClient<T>({ name: "..." }, key)` pattern.
+ *
+ * @example
+ * ```typescript
+ * // In your virtual object file:
+ * export const accountObject = createSagaVirtualObject(...);
+ * export type AccountObject = InferObjectType<typeof accountObject>;
+ *
+ * // In your client code (separate package):
+ * import type { AccountObject } from "./objects/account";
+ *
+ * const balance = await restateClient
+ *   .objectClient<AccountObject>({ name: "Account" }, "user-123")
+ *   .getBalance();
+ * ```
+ */
+export type InferObjectType<T> = T extends { handlers: infer H; name: infer N extends string }
+  ? restate.VirtualObjectDefinition<N, H>
+  : never;
+
+// =============================================================================
+// Internal Types for Restate SDK Integration
+// =============================================================================
+
+/**
+ * Run options for ctx.run() operations.
+ * Matches the Restate SDK's expected run options format.
+ * @internal
+ */
+export type RestateRunOptions = {
+  maxRetryAttempts?: number;
+  maxRetryDuration?: Duration | number;
+  initialRetryInterval?: Duration | number;
+  retryIntervalFactor?: number;
+  maxRetryInterval?: Duration | number;
+};
+
+/**
+ * Type constraint for Restate service definitions.
+ * Used to ensure type safety when working with service clients.
+ * @internal
+ */
+export type RestateServiceDefinition = {
+  name: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handlers: Record<string, (...args: any[]) => any>;
+};
+
+/**
+ * Type constraint for Restate object definitions.
+ * Used to ensure type safety when working with object clients.
+ * @internal
+ */
+export type RestateObjectDefinition = RestateServiceDefinition;

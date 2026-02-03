@@ -27,9 +27,16 @@
     "yalc:push": "npm run build && yalc push"
   },
   "peerDependencies": {
-    "@restatedev/restate-sdk": "^1.10.0"
+    "@restatedev/restate-sdk": "^1.10.0",
+    "awilix": "^10.0.0 || ^11.0.0 || ^12.0.0"
+  },
+  "peerDependenciesMeta": {
+    "awilix": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "awilix": "^12.0.2",
     "@restatedev/restate-sdk": "^1.10.2",
     "@restatedev/restate-sdk-clients": "^1.10.2",
     "@restatedev/restate-sdk-testcontainers": "^1.10.2",
@@ -44,12 +51,15 @@
     "distributed-transactions",
     "compensation",
     "workflow",
-    "orchestration"
+    "orchestration",
+    "dependency-injection",
+    "awilix",
+    "directus"
   ],
   "author": "Douglas Amoo-Sargon",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/kowalski21/restate-saga"
   }
 }

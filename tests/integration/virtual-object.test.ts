@@ -1,4 +1,11 @@
-// @ts-nocheck - SagaVirtualObject type is incompatible with SDK client types
+/**
+ * Integration tests for Saga Virtual Object functionality.
+ *
+ * Note: These tests use type assertions for SDK client calls because:
+ * - The Restate SDK clients package uses internal `Opts<...>` type wrappers
+ * - SagaVirtualObject's extended types don't perfectly align with SDK client expectations
+ * - This is a known limitation when testing with the SDK's type system
+ */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { RestateTestEnvironment } from "@restatedev/restate-sdk-testcontainers";
 import * as clients from "@restatedev/restate-sdk-clients";
@@ -12,7 +19,7 @@ import {
 // Track operations for verification
 const operationLog: string[] = [];
 
-// Steps for the virtual object
+// Steps for the virtual object - using type guards for compensation
 const creditStep = createSagaStep<
   { ctx: restate.ObjectContext; amount: number },
   { newBalance: number },
@@ -30,7 +37,9 @@ const creditStep = createSagaStep<
     );
   },
   compensate: async (data) => {
-    operationLog.push(`compensate:credit:${data.amount}`);
+    if ("amount" in data) {
+      operationLog.push(`compensate:credit:${data.amount}`);
+    }
   },
 });
 
@@ -53,11 +62,13 @@ const debitStep = createSagaStep<
     return new StepResponse({ newBalance }, { amount: input.amount });
   },
   compensate: async (data) => {
-    operationLog.push(`compensate:debit:${data.amount}`);
+    if ("amount" in data) {
+      operationLog.push(`compensate:debit:${data.amount}`);
+    }
   },
 });
 
-// Virtual Object definition
+// Virtual Object definition with explicit shared handler typing
 const accountObject = createSagaVirtualObject(
   "Account",
   {
@@ -65,20 +76,20 @@ const accountObject = createSagaVirtualObject(
     initialize: async (saga, ctx, input: { initialBalance: number }) => {
       const existing = await ctx.get<number>("balance");
       if (existing !== null) {
-        return { success: false, message: "Already initialized" };
+        return { success: false as const, message: "Already initialized" };
       }
       ctx.set("balance", input.initialBalance);
-      return { success: true, balance: input.initialBalance };
+      return { success: true as const, balance: input.initialBalance };
     },
 
     deposit: async (saga, ctx, input: { amount: number }) => {
       const result = await creditStep(saga, { ctx, amount: input.amount });
-      return { success: true, newBalance: result.newBalance };
+      return { success: true as const, newBalance: result.newBalance };
     },
 
     withdraw: async (saga, ctx, input: { amount: number }) => {
       const result = await debitStep(saga, { ctx, amount: input.amount });
-      return { success: true, newBalance: result.newBalance };
+      return { success: true as const, newBalance: result.newBalance };
     },
 
     transfer: async (
@@ -94,20 +105,39 @@ const accountObject = createSagaVirtualObject(
       operationLog.push(`transfer:${input.amount}:to:${input.toAccountId}`);
 
       return {
-        success: true,
+        success: true as const,
         newBalance: debit.newBalance,
         transferId: `txn_${Date.now()}`,
       };
     },
   },
   {
-    // Shared handlers (read-only, concurrent access)
-    getBalance: async (ctx) => {
+    // Shared handlers (read-only, concurrent access) - explicitly typed
+    getBalance: async (ctx: restate.ObjectSharedContext) => {
       const balance = (await ctx.get<number>("balance")) || 0;
       return { balance };
     },
   }
 );
+
+// Helper to get typed account client
+// Uses type assertion due to SDK client internal type wrappers
+function getAccountClient(ingress: clients.Ingress, key: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ingress.objectClient(accountObject, key) as any as {
+    initialize: (input: { initialBalance: number }) => Promise<
+      { success: true; balance: number } | { success: false; message: string }
+    >;
+    deposit: (input: { amount: number }) => Promise<{ success: true; newBalance: number }>;
+    withdraw: (input: { amount: number }) => Promise<{ success: true; newBalance: number }>;
+    transfer: (input: { toAccountId: string; amount: number }) => Promise<{
+      success: true;
+      newBalance: number;
+      transferId: string;
+    }>;
+    getBalance: () => Promise<{ balance: number }>;
+  };
+}
 
 describe("Saga Virtual Object Integration", () => {
   let restateTestEnvironment: RestateTestEnvironment;
@@ -128,29 +158,33 @@ describe("Saga Virtual Object Integration", () => {
 
   describe("Initialization", () => {
     it("should initialize account with balance", async () => {
-      const account = restateIngress.objectClient(accountObject, "init-test-1");
+      const account = getAccountClient(restateIngress, "init-test-1");
 
       const result = await account.initialize({ initialBalance: 100 });
 
       expect(result.success).toBe(true);
-      expect(result.balance).toBe(100);
+      if (result.success) {
+        expect(result.balance).toBe(100);
+      }
     });
 
     it("should reject re-initialization", async () => {
-      const account = restateIngress.objectClient(accountObject, "init-test-2");
+      const account = getAccountClient(restateIngress, "init-test-2");
 
       await account.initialize({ initialBalance: 50 });
       const result = await account.initialize({ initialBalance: 100 });
 
       expect(result.success).toBe(false);
-      expect(result.message).toBe("Already initialized");
+      if (!result.success) {
+        expect(result.message).toBe("Already initialized");
+      }
     });
   });
 
   describe("Deposit", () => {
     it("should deposit and update balance", async () => {
       operationLog.length = 0;
-      const account = restateIngress.objectClient(accountObject, "deposit-test");
+      const account = getAccountClient(restateIngress, "deposit-test");
 
       await account.initialize({ initialBalance: 100 });
       const result = await account.deposit({ amount: 50 });
@@ -164,7 +198,7 @@ describe("Saga Virtual Object Integration", () => {
   describe("Withdraw", () => {
     it("should withdraw when sufficient balance", async () => {
       operationLog.length = 0;
-      const account = restateIngress.objectClient(accountObject, "withdraw-test-1");
+      const account = getAccountClient(restateIngress, "withdraw-test-1");
 
       await account.initialize({ initialBalance: 100 });
       const result = await account.withdraw({ amount: 30 });
@@ -175,7 +209,7 @@ describe("Saga Virtual Object Integration", () => {
     });
 
     it("should reject withdrawal with insufficient balance", async () => {
-      const account = restateIngress.objectClient(accountObject, "withdraw-test-2");
+      const account = getAccountClient(restateIngress, "withdraw-test-2");
 
       await account.initialize({ initialBalance: 50 });
 
@@ -187,7 +221,7 @@ describe("Saga Virtual Object Integration", () => {
 
   describe("Shared handlers", () => {
     it("should read balance via shared handler", async () => {
-      const account = restateIngress.objectClient(accountObject, "balance-test");
+      const account = getAccountClient(restateIngress, "balance-test");
 
       await account.initialize({ initialBalance: 200 });
       await account.deposit({ amount: 50 });
@@ -201,7 +235,7 @@ describe("Saga Virtual Object Integration", () => {
   describe("State verification", () => {
     it("should persist state correctly", async () => {
       const accountId = "state-test";
-      const account = restateIngress.objectClient(accountObject, accountId);
+      const account = getAccountClient(restateIngress, accountId);
 
       await account.initialize({ initialBalance: 100 });
       await account.deposit({ amount: 25 });

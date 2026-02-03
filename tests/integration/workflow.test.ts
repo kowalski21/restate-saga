@@ -1,4 +1,11 @@
-// @ts-nocheck - SagaWorkflowService type is incompatible with SDK client types
+/**
+ * Integration tests for saga workflow functionality.
+ *
+ * Note: Type assertions are used for SDK client calls because:
+ * - SagaWorkflowService has additional properties (runAsStep) not in base ServiceDefinition
+ * - The Restate SDK clients package infers IngressClient<unknown> for these extended types
+ * - This is a known limitation when testing with the SDK's type system
+ */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { RestateTestEnvironment } from "@restatedev/restate-sdk-testcontainers";
 import * as clients from "@restatedev/restate-sdk-clients";
@@ -8,6 +15,7 @@ import {
   StepResponse,
   registerTerminalErrors,
   clearTerminalErrors,
+  type InferServiceType,
 } from "../../src/index.js";
 
 // Test error classes
@@ -62,7 +70,7 @@ const validationStep = createSagaStep<{ email: string }, { valid: boolean }, nul
   },
 });
 
-// Test workflows
+// Test workflows with explicit type exports for SDK client compatibility
 const successWorkflow = createSagaWorkflow(
   "SuccessWorkflow",
   async (saga, input: { value: number }) => {
@@ -71,6 +79,7 @@ const successWorkflow = createSagaWorkflow(
     return { finalValue: s2.final };
   }
 );
+type SuccessWorkflowService = InferServiceType<typeof successWorkflow>;
 
 const failureWorkflow = createSagaWorkflow(
   "FailureWorkflow",
@@ -81,6 +90,7 @@ const failureWorkflow = createSagaWorkflow(
     return { finalValue: s2.final };
   }
 );
+type FailureWorkflowService = InferServiceType<typeof failureWorkflow>;
 
 const validationWorkflow = createSagaWorkflow(
   "ValidationWorkflow",
@@ -90,6 +100,7 @@ const validationWorkflow = createSagaWorkflow(
     return { result: s1.result };
   }
 );
+type ValidationWorkflowService = InferServiceType<typeof validationWorkflow>;
 
 describe("Saga Workflow Integration", () => {
   let restateTestEnvironment: RestateTestEnvironment;
@@ -114,7 +125,9 @@ describe("Saga Workflow Integration", () => {
 
   describe("Successful execution", () => {
     it("should execute all steps and return result", async () => {
-      const client = restateIngress.serviceClient(successWorkflow);
+      const client = restateIngress.serviceClient<SuccessWorkflowService>({
+        name: "SuccessWorkflow",
+      });
 
       const result = await client.run({ value: 5 });
 
@@ -125,7 +138,9 @@ describe("Saga Workflow Integration", () => {
   describe("Compensation on failure", () => {
     it("should run compensations in reverse order when step fails", async () => {
       compensationLog.length = 0; // Clear log
-      const client = restateIngress.serviceClient(failureWorkflow);
+      const client = restateIngress.serviceClient<FailureWorkflowService>({
+        name: "FailureWorkflow",
+      });
 
       await expect(
         client.run({ value: 7, shouldFail: true })
@@ -144,7 +159,9 @@ describe("Saga Workflow Integration", () => {
 
     it("should not run compensations when workflow succeeds", async () => {
       compensationLog.length = 0;
-      const client = restateIngress.serviceClient(failureWorkflow);
+      const client = restateIngress.serviceClient<FailureWorkflowService>({
+        name: "FailureWorkflow",
+      });
 
       const result = await client.run({ value: 3, shouldFail: false });
 
@@ -156,7 +173,9 @@ describe("Saga Workflow Integration", () => {
   describe("Terminal error handling", () => {
     it("should trigger compensation for registered terminal errors", async () => {
       compensationLog.length = 0;
-      const client = restateIngress.serviceClient(validationWorkflow);
+      const client = restateIngress.serviceClient<ValidationWorkflowService>({
+        name: "ValidationWorkflow",
+      });
 
       await expect(
         client.run({ email: "invalid-email", value: 5 })
@@ -168,7 +187,9 @@ describe("Saga Workflow Integration", () => {
     });
 
     it("should succeed with valid input", async () => {
-      const client = restateIngress.serviceClient(validationWorkflow);
+      const client = restateIngress.serviceClient<ValidationWorkflowService>({
+        name: "ValidationWorkflow",
+      });
 
       const result = await client.run({ email: "test@example.com", value: 5 });
 

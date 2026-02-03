@@ -22,6 +22,7 @@ export type {
   SagaObjectHandler,
   AnySagaContext,
   InferServiceType,
+  InferObjectType,
 } from "./types.js";
 
 // Error Registry
@@ -57,3 +58,36 @@ export {
 
 // Nested Sagas
 export { runNestedSaga, createSagaModule } from "./nested.js";
+
+// Container / Dependency Injection (Awilix)
+export type {
+  ContainerSagaContext,
+  ContainerWorkflowContext,
+  AnyContainerSagaContext,
+  ContainerStepConfig,
+  ContainerWorkflowService,
+  ContainerRestateWorkflowService,
+  // Type inference helpers (for createContainerWorkflow)
+  InferContainerServiceType,
+  InferContainerCradle,
+  InferContainerInput,
+  InferContainerOutput,
+  InferContainerName,
+  InferContainerWorkflow,
+  // Type inference helpers (for defineContainerWorkflow factory pattern)
+  InferFactoryWorkflow,
+  InferFactoryServiceType,
+  InferFactoryInput,
+  InferFactoryOutput,
+  InferFactoryName,
+  InferFactoryCradle,
+  InferFactory,
+} from "./container.js";
+export {
+  createContainerStep,
+  createContainerStepStrict,
+  createContainerWorkflow,
+  createContainerRestateWorkflow,
+  defineContainerWorkflow,
+  defineContainerRestateWorkflow,
+} from "./container.js";
