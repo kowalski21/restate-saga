@@ -1,5 +1,7 @@
 # @kowalski21/restate-saga
 
+[![GitHub](https://img.shields.io/badge/GitHub-kowalski21%2Frestate--saga-blue?logo=github)](https://github.com/kowalski21/restate-saga)
+
 Saga pattern implementation for [Restate](https://restate.dev/) durable workflows with automatic compensation.
 
 ## Features
