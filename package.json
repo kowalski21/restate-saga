@@ -1,6 +1,6 @@
 {
   "name": "@kowalski21/restate-saga",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Saga pattern implementation for Restate durable workflows with automatic compensation",
   "type": "module",
   "main": "dist/index.js",
