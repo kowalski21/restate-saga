@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-09
+
+### Added
+- Scoped saga factory pattern with `defineSagaFactory` for per-invocation scoped containers
+- Scope disposal strategies (`true`, `false`, `"on-success"`, custom function)
+- Factory type inference helpers (`InferFactory`, `InferFactoryServiceType`, etc.)
+- Saga factory example (`examples/09-saga-factory.ts`)
+
 ## [0.2.0] - 2026-02-02
 
 ### Added
