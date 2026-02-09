@@ -871,6 +871,367 @@ export function defineContainerRestateWorkflow<TCradle extends object>() {
   };
 }
 
+// =============================================================================
+// Scoped Workflow Factory (Medusa-inspired)
+// =============================================================================
+
+/**
+ * Disposal strategy for scoped containers.
+ */
+export type ScopeDisposalStrategy =
+  | boolean
+  | "on-success"
+  | ((scope: AwilixContainer<any>, error?: Error) => Promise<void>);
+
+/**
+ * Configuration for a scoped workflow factory.
+ */
+export interface SagaFactoryConfig<RootCradle extends object, ScopedCradle extends object, TInput = any> {
+  /**
+   * Creates a scoped container from the root container and workflow input.
+   * Called once per workflow invocation.
+   *
+   * @param rootContainer - The root Awilix container
+   * @param input - The workflow input (use extractContext to access specific fields)
+   * @returns A scoped container with request-specific dependencies
+   */
+  createScope: (
+    rootContainer: AwilixContainer<RootCradle>,
+    input: TInput
+  ) => AwilixContainer<ScopedCradle>;
+
+  /**
+   * Optional: Extract context from input for scope creation.
+   * Default: returns input._ctx if present
+   *
+   * @param input - The workflow input
+   * @returns The context object to use in createScope
+   */
+  extractContext?: (input: TInput) => unknown;
+
+  /**
+   * Optional: Control when/how scoped containers are disposed.
+   * - true: Always dispose after workflow (default)
+   * - false: Never auto-dispose
+   * - "on-success": Only dispose on successful completion
+   * - function: Custom disposal logic
+   */
+  disposeScope?: ScopeDisposalStrategy;
+}
+
+/**
+ * Return type for defineSagaFactory.
+ */
+export interface SagaFactory<RootCradle extends object, ScopedCradle extends object> {
+  /**
+   * Creates a scoped workflow that automatically creates and manages
+   * a scoped container per invocation.
+   */
+  createWorkflow: <Name extends string, Input, Output>(
+    name: Name,
+    handler: (saga: ContainerSagaContext<ScopedCradle>, input: Input) => Promise<Output>,
+    options?: SagaWorkflowOptions
+  ) => (rootContainer: AwilixContainer<RootCradle>) => ContainerWorkflowService<Name, Input, Output, ScopedCradle>;
+
+  /**
+   * Creates a scoped Restate Workflow (with workflowId support).
+   */
+  createRestateWorkflow: <
+    Name extends string,
+    Input,
+    Output,
+    Handlers extends Record<string, (ctx: restate.WorkflowSharedContext, input: any) => Promise<any>> = Record<string, never>
+  >(
+    name: Name,
+    run: (
+      saga: ContainerWorkflowContext<ScopedCradle>,
+      ctx: restate.WorkflowContext,
+      input: Input
+    ) => Promise<Output>,
+    handlers?: Handlers,
+    options?: SagaRestateWorkflowOptions
+  ) => (rootContainer: AwilixContainer<RootCradle>) => ContainerRestateWorkflowService<Name, Input, Output, ScopedCradle>;
+
+  /**
+   * Convenience method: pre-typed step creator bound to ScopedCradle.
+   * Steps created this way can also be used with other compatible factories.
+   */
+  createStep: ReturnType<typeof createContainerStep<ScopedCradle>>;
+
+  /**
+   * Convenience method: pre-typed strict step creator bound to ScopedCradle.
+   */
+  createStepStrict: ReturnType<typeof createContainerStepStrict<ScopedCradle>>;
+}
+
+/**
+ * Handles scope disposal based on the configured strategy.
+ * @internal
+ */
+async function handleScopeDisposal(
+  scope: AwilixContainer<any>,
+  strategy: ScopeDisposalStrategy | undefined,
+  error?: Error
+): Promise<void> {
+  // Default: always dispose
+  if (strategy === undefined || strategy === true) {
+    await scope.dispose();
+    return;
+  }
+
+  // Never dispose
+  if (strategy === false) {
+    return;
+  }
+
+  // Only on success
+  if (strategy === "on-success") {
+    if (!error) {
+      await scope.dispose();
+    }
+    return;
+  }
+
+  // Custom function
+  await strategy(scope, error);
+}
+
+/**
+ * Creates a scoped workflow factory with automatic dependency injection.
+ *
+ * This factory pattern allows you to:
+ * 1. Define scope creation logic once
+ * 2. Create workflows that automatically get scoped services
+ * 3. Share steps across multiple factories
+ *
+ * Inspired by MedusaJS workflows but maintains saga-lib's imperative async style.
+ *
+ * @example
+ * ```typescript
+ * import { defineSagaFactory, createContainerStep, StepResponse } from "@restatedev/saga-lib"
+ * import { asValue, asFunction } from "awilix"
+ *
+ * interface RootCradle {
+ *   knex: Knex
+ *   logger: Logger
+ * }
+ *
+ * interface AppCradle extends RootCradle {
+ *   accountability: Accountability
+ *   schema: SchemaOverview
+ *   ordersService: ItemsService
+ * }
+ *
+ * // Define factory once
+ * const { createWorkflow, createStep } = defineSagaFactory<RootCradle, AppCradle>({
+ *   createScope: (root, input) => {
+ *     const scope = root.createScope()
+ *     scope.register({
+ *       accountability: asValue(input._ctx?.accountability),
+ *       schema: asValue(input._ctx?.schema),
+ *       ordersService: asFunction(({ knex, schema, accountability }) =>
+ *         new ItemsService("orders", { knex, schema, accountability })
+ *       ).scoped(),
+ *     })
+ *     return scope
+ *   },
+ * })
+ *
+ * // Create steps (can also use createContainerStep<AppCradle>() directly)
+ * const createOrder = createStep({
+ *   name: "CreateOrder",
+ *   run: async (saga, input: { customerId: string }) => {
+ *     const orderId = await saga.services.ordersService.createOne(input)
+ *     return new StepResponse({ orderId }, { orderId })
+ *   },
+ *   compensate: async (saga, data) => {
+ *     await saga.services.ordersService.deleteOne(data.orderId)
+ *   },
+ * })
+ *
+ * // Create workflow - clean, no type annotations
+ * const checkoutWorkflow = createWorkflow("Checkout", async (saga, input) => {
+ *   const order = await createOrder(saga, { customerId: input.customerId })
+ *   return { orderId: order.orderId }
+ * })
+ *
+ * // At startup
+ * const workflow = checkoutWorkflow(rootContainer)
+ * restate.endpoint().bind(workflow).listen()
+ * ```
+ */
+export function defineSagaFactory<RootCradle extends object, ScopedCradle extends object>(
+  config: SagaFactoryConfig<RootCradle, ScopedCradle>
+): SagaFactory<RootCradle, ScopedCradle> {
+  const { createScope, disposeScope } = config;
+
+  return {
+    createWorkflow: <Name extends string, Input, Output>(
+      name: Name,
+      handler: (saga: ContainerSagaContext<ScopedCradle>, input: Input) => Promise<Output>,
+      options?: SagaWorkflowOptions
+    ) => {
+      return (
+        rootContainer: AwilixContainer<RootCradle>
+      ): ContainerWorkflowService<Name, Input, Output, ScopedCradle> => {
+        // Build service options
+        const serviceOptions = options
+          ? {
+              retryPolicy: toServiceRetryPolicy(options.retryPolicy),
+              idempotencyRetention: options.idempotencyRetention,
+              journalRetention: options.journalRetention,
+              inactivityTimeout: options.inactivityTimeout,
+              abortTimeout: options.abortTimeout,
+              ingressPrivate: options.ingressPrivate,
+              asTerminalError: options.asTerminalError,
+            }
+          : undefined;
+
+        const service = restate.service({
+          name,
+          handlers: {
+            run: async (ctx: restate.Context, input: Input) => {
+              // Create scoped container for this invocation
+              let scopedContainer: AwilixContainer<ScopedCradle>;
+              try {
+                scopedContainer = createScope(rootContainer, input);
+              } catch (err) {
+                // Scope creation failures are terminal - no point retrying
+                throw new restate.TerminalError(
+                  `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
+                );
+              }
+
+              const services = scopedContainer.cradle;
+
+              const saga: ContainerSagaContext<ScopedCradle, typeof scopedContainer> = {
+                ctx,
+                compensations: [],
+                services,
+                container: scopedContainer,
+              };
+
+              let error: Error | undefined;
+
+              try {
+                return await handler(saga, input);
+              } catch (e) {
+                error = e instanceof Error ? e : new Error(String(e));
+                if (e instanceof restate.TerminalError) {
+                  for (const compensate of saga.compensations.reverse()) {
+                    await compensate();
+                  }
+                }
+                throw e;
+              } finally {
+                await handleScopeDisposal(scopedContainer, disposeScope, error);
+              }
+            },
+          },
+          options: serviceOptions,
+        });
+
+        return Object.assign(service, {
+          runAsStep: (parentSaga: AnyContainerSagaContext<ScopedCradle>, input: Input): Promise<Output> => {
+            // Nested workflows share parent's scope - no new scope created
+            return handler(parentSaga as ContainerSagaContext<ScopedCradle>, input);
+          },
+        }) as ContainerWorkflowService<Name, Input, Output, ScopedCradle>;
+      };
+    },
+
+    createRestateWorkflow: <
+      Name extends string,
+      Input,
+      Output,
+      Handlers extends Record<
+        string,
+        (ctx: restate.WorkflowSharedContext, input: any) => Promise<any>
+      > = Record<string, never>,
+    >(
+      name: Name,
+      run: (
+        saga: ContainerWorkflowContext<ScopedCradle>,
+        ctx: restate.WorkflowContext,
+        input: Input
+      ) => Promise<Output>,
+      handlers?: Handlers,
+      options?: SagaRestateWorkflowOptions
+    ) => {
+      return (
+        rootContainer: AwilixContainer<RootCradle>
+      ): ContainerRestateWorkflowService<Name, Input, Output, ScopedCradle> => {
+        const workflowOptions = options
+          ? {
+              retryPolicy: toServiceRetryPolicy(options.retryPolicy),
+              idempotencyRetention: options.idempotencyRetention,
+              journalRetention: options.journalRetention,
+              inactivityTimeout: options.inactivityTimeout,
+              abortTimeout: options.abortTimeout,
+              ingressPrivate: options.ingressPrivate,
+              asTerminalError: options.asTerminalError,
+            }
+          : undefined;
+
+        const workflow = restate.workflow({
+          name,
+          handlers: {
+            run: async (ctx: restate.WorkflowContext, input: Input) => {
+              // Create scoped container for this invocation
+              let scopedContainer: AwilixContainer<ScopedCradle>;
+              try {
+                scopedContainer = createScope(rootContainer, input);
+              } catch (err) {
+                throw new restate.TerminalError(
+                  `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
+                );
+              }
+
+              const services = scopedContainer.cradle;
+
+              const saga: ContainerWorkflowContext<ScopedCradle, typeof scopedContainer> = {
+                ctx,
+                compensations: [],
+                services,
+                container: scopedContainer,
+              };
+
+              let error: Error | undefined;
+
+              try {
+                return await run(saga, ctx, input);
+              } catch (e) {
+                error = e instanceof Error ? e : new Error(String(e));
+                if (e instanceof restate.TerminalError) {
+                  for (const compensate of saga.compensations.reverse()) {
+                    await compensate();
+                  }
+                }
+                throw e;
+              } finally {
+                await handleScopeDisposal(scopedContainer, disposeScope, error);
+              }
+            },
+            ...handlers,
+          },
+          options: workflowOptions,
+        });
+
+        return Object.assign(workflow, {
+          runAsStep: (parentSaga: ContainerWorkflowContext<ScopedCradle>, input: Input): Promise<Output> => {
+            // Nested workflows share parent's scope
+            return run(parentSaga, parentSaga.ctx, input);
+          },
+        }) as ContainerRestateWorkflowService<Name, Input, Output, ScopedCradle>;
+      };
+    },
+
+    // Convenience: pre-typed step creators
+    createStep: createContainerStep<ScopedCradle>(),
+    createStepStrict: createContainerStepStrict<ScopedCradle>(),
+  };
+}
+
 /**
  * Re-export StepResponse for convenience when using container steps.
  */

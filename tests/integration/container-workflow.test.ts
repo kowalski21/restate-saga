@@ -12,6 +12,7 @@ import {
   createContainerStepStrict,
   createContainerWorkflow,
   defineContainerWorkflow,
+  defineSagaFactory,
   StepResponse,
   type InferContainerServiceType,
 } from "../../src/container.js";
@@ -566,6 +567,476 @@ describe("Container Workflow Integration", () => {
       const paymentIdx = compensationLog.findIndex((log) => log.startsWith("compensate:payment:"));
       const orderIdx = compensationLog.findIndex((log) => log.startsWith("compensate:order:"));
       expect(paymentIdx).toBeLessThan(orderIdx);
+    });
+  });
+});
+
+// =============================================================================
+// defineSagaFactory Integration Tests
+// =============================================================================
+
+describe("defineSagaFactory Integration", () => {
+  let restateTestEnvironment: RestateTestEnvironment;
+  let restateIngress: clients.Ingress;
+
+  // Track scope creation and disposal
+  const scopeLog: string[] = [];
+  const factoryServiceCalls: string[] = [];
+  const factoryCompensationLog: string[] = [];
+
+  // Root cradle - app-level singletons
+  interface RootCradle {
+    database: { query: (sql: string) => Promise<unknown[]> };
+    logger: { info: (msg: string) => void };
+  }
+
+  // Scoped cradle - request-specific services
+  interface ScopedCradle extends RootCradle {
+    requestId: string;
+    userId: string;
+    ordersService: {
+      create: (data: { userId: string }) => Promise<{ id: string }>;
+      delete: (id: string) => Promise<void>;
+    };
+    paymentsService: {
+      charge: (amount: number) => Promise<{ id: string }>;
+      refund: (id: string) => Promise<void>;
+    };
+  }
+
+  // Context passed in workflow input
+  interface RequestContext {
+    requestId: string;
+    userId: string;
+  }
+
+  // Root container (singleton)
+  let rootContainer: AwilixContainer<RootCradle>;
+
+  // Create the factory
+  const { createWorkflow, createStep } = defineSagaFactory<RootCradle, ScopedCradle>({
+    createScope: (root, input: { _ctx?: RequestContext }) => {
+      const ctx = input._ctx ?? { requestId: "default", userId: "anonymous" };
+      scopeLog.push(`scope:create:${ctx.requestId}`);
+
+      const scope = root.createScope<ScopedCradle>();
+      scope.register({
+        requestId: asValue(ctx.requestId),
+        userId: asValue(ctx.userId),
+        ordersService: asValue({
+          create: async (data: { userId: string }) => {
+            const id = `order_${ctx.requestId}_${Date.now()}`;
+            factoryServiceCalls.push(`ordersService.create:${data.userId}:${ctx.requestId}`);
+            return { id };
+          },
+          delete: async (id: string) => {
+            factoryServiceCalls.push(`ordersService.delete:${id}:${ctx.requestId}`);
+          },
+        }),
+        paymentsService: asValue({
+          charge: async (amount: number) => {
+            const id = `payment_${ctx.requestId}_${Date.now()}`;
+            factoryServiceCalls.push(`paymentsService.charge:${amount}:${ctx.requestId}`);
+            return { id };
+          },
+          refund: async (id: string) => {
+            factoryServiceCalls.push(`paymentsService.refund:${id}:${ctx.requestId}`);
+          },
+        }),
+      });
+
+      return scope;
+    },
+    disposeScope: async (scope, error) => {
+      const requestId = scope.cradle.requestId;
+      scopeLog.push(`scope:dispose:${requestId}:${error ? "error" : "success"}`);
+      await scope.dispose();
+    },
+  });
+
+  // Define steps using factory's createStep
+  const createOrderStep = createStep({
+    name: "FactoryCreateOrder",
+    run: async (saga, input: { customerId: string }) => {
+      const order = await saga.services.ordersService.create({ userId: input.customerId });
+      return new StepResponse({ orderId: order.id }, { orderId: order.id });
+    },
+    compensate: async (saga, data) => {
+      if ("orderId" in data) {
+        await saga.services.ordersService.delete(data.orderId);
+        factoryCompensationLog.push(`compensate:order:${data.orderId}:${saga.services.requestId}`);
+      }
+    },
+  });
+
+  const chargePaymentStep = createStep({
+    name: "FactoryChargePayment",
+    run: async (saga, input: { amount: number }) => {
+      const payment = await saga.services.paymentsService.charge(input.amount);
+      return new StepResponse({ paymentId: payment.id }, { paymentId: payment.id });
+    },
+    compensate: async (saga, data) => {
+      if ("paymentId" in data) {
+        await saga.services.paymentsService.refund(data.paymentId);
+        factoryCompensationLog.push(`compensate:payment:${data.paymentId}:${saga.services.requestId}`);
+      }
+    },
+  });
+
+  const failingStep = createStep({
+    name: "FactoryFailingStep",
+    run: async (saga, input: { shouldFail: boolean }) => {
+      if (input.shouldFail) {
+        return StepResponse.permanentFailure("Intentional factory failure", null);
+      }
+      return new StepResponse({ success: true }, null);
+    },
+  });
+
+  // Define workflows using factory's createWorkflow
+  const scopedCheckoutWorkflow = createWorkflow(
+    "ScopedCheckoutWorkflow",
+    async (saga, input: { customerId: string; amount: number; _ctx?: RequestContext }) => {
+      // Verify scoped services are available
+      saga.services.logger.info(`Processing checkout for request ${saga.services.requestId}`);
+
+      const order = await createOrderStep(saga, { customerId: input.customerId });
+      const payment = await chargePaymentStep(saga, { amount: input.amount });
+
+      return {
+        orderId: order.orderId,
+        paymentId: payment.paymentId,
+        requestId: saga.services.requestId,
+      };
+    }
+  );
+
+  const scopedFailingWorkflow = createWorkflow(
+    "ScopedFailingWorkflow",
+    async (saga, input: { customerId: string; amount: number; shouldFail: boolean; _ctx?: RequestContext }) => {
+      const order = await createOrderStep(saga, { customerId: input.customerId });
+      const payment = await chargePaymentStep(saga, { amount: input.amount });
+      await failingStep(saga, { shouldFail: input.shouldFail });
+
+      return {
+        orderId: order.orderId,
+        paymentId: payment.paymentId,
+        requestId: saga.services.requestId,
+      };
+    }
+  );
+
+  // Nested workflow handler
+  const paymentHandler = async (
+    saga: Parameters<Parameters<typeof createWorkflow>[1]>[0],
+    input: { amount: number }
+  ) => {
+    const payment = await chargePaymentStep(saga, { amount: input.amount });
+    return { paymentId: payment.paymentId, requestId: saga.services.requestId };
+  };
+
+  const scopedParentWorkflow = createWorkflow(
+    "ScopedParentWorkflow",
+    async (saga, input: { customerId: string; amount: number; shouldFail: boolean; _ctx?: RequestContext }) => {
+      const order = await createOrderStep(saga, { customerId: input.customerId });
+
+      // Call nested handler directly (shares scope)
+      const payment = await paymentHandler(saga, { amount: input.amount });
+
+      await failingStep(saga, { shouldFail: input.shouldFail });
+
+      return {
+        orderId: order.orderId,
+        paymentId: payment.paymentId,
+        requestId: saga.services.requestId,
+      };
+    }
+  );
+
+  beforeAll(async () => {
+    // Create root container
+    rootContainer = createContainer<RootCradle>();
+    rootContainer.register({
+      database: asValue({ query: async () => [] }),
+      logger: asValue({ info: (msg: string) => console.log(`[LOG] ${msg}`) }),
+    });
+
+    // Instantiate workflows with root container
+    const checkoutWf = scopedCheckoutWorkflow(rootContainer);
+    const failingWf = scopedFailingWorkflow(rootContainer);
+    const parentWf = scopedParentWorkflow(rootContainer);
+
+    restateTestEnvironment = await RestateTestEnvironment.start({
+      services: [checkoutWf, failingWf, parentWf],
+    });
+    restateIngress = clients.connect({
+      url: restateTestEnvironment.baseUrl(),
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await restateTestEnvironment?.stop();
+  });
+
+  beforeEach(() => {
+    scopeLog.length = 0;
+    factoryServiceCalls.length = 0;
+    factoryCompensationLog.length = 0;
+  });
+
+  describe("scope creation", () => {
+    it("creates scoped container per workflow invocation", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: { customerId: string; amount: number; _ctx?: RequestContext }) => Promise<{
+          orderId: string;
+          paymentId: string;
+          requestId: string;
+        }>;
+      }>({
+        name: "ScopedCheckoutWorkflow",
+      });
+
+      const result = await client.run({
+        customerId: "user1",
+        amount: 100,
+        _ctx: { requestId: "req-001", userId: "user1" },
+      });
+
+      expect(result.requestId).toBe("req-001");
+      expect(result.orderId).toContain("req-001");
+      expect(result.paymentId).toContain("req-001");
+
+      // Verify scope was created and disposed
+      expect(scopeLog).toContain("scope:create:req-001");
+      expect(scopeLog).toContain("scope:dispose:req-001:success");
+    });
+
+    it("each invocation gets its own scope", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: { customerId: string; amount: number; _ctx?: RequestContext }) => Promise<{
+          orderId: string;
+          paymentId: string;
+          requestId: string;
+        }>;
+      }>({
+        name: "ScopedCheckoutWorkflow",
+      });
+
+      // Run two workflows with different contexts
+      const [result1, result2] = await Promise.all([
+        client.run({
+          customerId: "userA",
+          amount: 100,
+          _ctx: { requestId: "req-A", userId: "userA" },
+        }),
+        client.run({
+          customerId: "userB",
+          amount: 200,
+          _ctx: { requestId: "req-B", userId: "userB" },
+        }),
+      ]);
+
+      expect(result1.requestId).toBe("req-A");
+      expect(result2.requestId).toBe("req-B");
+
+      // Both scopes should be created
+      expect(scopeLog.filter((l) => l.startsWith("scope:create:"))).toHaveLength(2);
+    });
+  });
+
+  describe("scoped services", () => {
+    it("provides scoped services in step run function", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: { customerId: string; amount: number; _ctx?: RequestContext }) => Promise<{
+          orderId: string;
+          paymentId: string;
+          requestId: string;
+        }>;
+      }>({
+        name: "ScopedCheckoutWorkflow",
+      });
+
+      await client.run({
+        customerId: "scopedUser",
+        amount: 500,
+        _ctx: { requestId: "req-scoped", userId: "scopedUser" },
+      });
+
+      // Verify services received the scoped context
+      expect(factoryServiceCalls).toContain("ordersService.create:scopedUser:req-scoped");
+      expect(factoryServiceCalls).toContain("paymentsService.charge:500:req-scoped");
+    });
+
+    it("provides scoped services in compensate function", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: {
+          customerId: string;
+          amount: number;
+          shouldFail: boolean;
+          _ctx?: RequestContext;
+        }) => Promise<unknown>;
+      }>({
+        name: "ScopedFailingWorkflow",
+      });
+
+      await expect(
+        client.run({
+          customerId: "failUser",
+          amount: 300,
+          shouldFail: true,
+          _ctx: { requestId: "req-fail", userId: "failUser" },
+        })
+      ).rejects.toThrow("Intentional factory failure");
+
+      // Wait for compensations
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Verify compensations used scoped services
+      expect(factoryCompensationLog.some((l) => l.includes(":req-fail"))).toBe(true);
+      expect(factoryServiceCalls.some((l) => l.includes("refund") && l.includes("req-fail"))).toBe(true);
+      expect(factoryServiceCalls.some((l) => l.includes("delete") && l.includes("req-fail"))).toBe(true);
+    });
+  });
+
+  describe("scope disposal", () => {
+    it("disposes scope on successful completion", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: { customerId: string; amount: number; _ctx?: RequestContext }) => Promise<unknown>;
+      }>({
+        name: "ScopedCheckoutWorkflow",
+      });
+
+      await client.run({
+        customerId: "disposeUser",
+        amount: 100,
+        _ctx: { requestId: "req-dispose-success", userId: "disposeUser" },
+      });
+
+      expect(scopeLog).toContain("scope:dispose:req-dispose-success:success");
+    });
+
+    it("disposes scope on failure", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: {
+          customerId: string;
+          amount: number;
+          shouldFail: boolean;
+          _ctx?: RequestContext;
+        }) => Promise<unknown>;
+      }>({
+        name: "ScopedFailingWorkflow",
+      });
+
+      await expect(
+        client.run({
+          customerId: "disposeFailUser",
+          amount: 100,
+          shouldFail: true,
+          _ctx: { requestId: "req-dispose-fail", userId: "disposeFailUser" },
+        })
+      ).rejects.toThrow();
+
+      // Wait for compensations and disposal
+      await new Promise((r) => setTimeout(r, 500));
+
+      expect(scopeLog).toContain("scope:dispose:req-dispose-fail:error");
+    });
+  });
+
+  describe("nested workflows", () => {
+    it("nested handler shares parent scope", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: {
+          customerId: string;
+          amount: number;
+          shouldFail: boolean;
+          _ctx?: RequestContext;
+        }) => Promise<{
+          orderId: string;
+          paymentId: string;
+          requestId: string;
+        }>;
+      }>({
+        name: "ScopedParentWorkflow",
+      });
+
+      const result = await client.run({
+        customerId: "nestedUser",
+        amount: 400,
+        shouldFail: false,
+        _ctx: { requestId: "req-nested", userId: "nestedUser" },
+      });
+
+      expect(result.requestId).toBe("req-nested");
+
+      // Only one scope should be created (parent's)
+      const createLogs = scopeLog.filter((l) => l.startsWith("scope:create:"));
+      expect(createLogs).toHaveLength(1);
+      expect(createLogs[0]).toBe("scope:create:req-nested");
+
+      // Both steps should use the same scoped context
+      expect(factoryServiceCalls).toContain("ordersService.create:nestedUser:req-nested");
+      expect(factoryServiceCalls).toContain("paymentsService.charge:400:req-nested");
+    });
+
+    it("compensations from nested handler join parent stack", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: {
+          customerId: string;
+          amount: number;
+          shouldFail: boolean;
+          _ctx?: RequestContext;
+        }) => Promise<unknown>;
+      }>({
+        name: "ScopedParentWorkflow",
+      });
+
+      await expect(
+        client.run({
+          customerId: "nestedFailUser",
+          amount: 600,
+          shouldFail: true,
+          _ctx: { requestId: "req-nested-fail", userId: "nestedFailUser" },
+        })
+      ).rejects.toThrow("Intentional factory failure");
+
+      // Wait for compensations
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Both compensations should run with the same scope context
+      const orderComp = factoryCompensationLog.find((l) => l.includes("compensate:order:"));
+      const paymentComp = factoryCompensationLog.find((l) => l.includes("compensate:payment:"));
+
+      expect(orderComp).toContain("req-nested-fail");
+      expect(paymentComp).toContain("req-nested-fail");
+
+      // Payment (nested) compensates before order (parent) - reverse order
+      const paymentIdx = factoryCompensationLog.findIndex((l) => l.includes("compensate:payment:"));
+      const orderIdx = factoryCompensationLog.findIndex((l) => l.includes("compensate:order:"));
+      expect(paymentIdx).toBeLessThan(orderIdx);
+    });
+  });
+
+  describe("default context handling", () => {
+    it("uses default context when _ctx not provided", async () => {
+      const client = restateIngress.serviceClient<{
+        run: (input: { customerId: string; amount: number; _ctx?: RequestContext }) => Promise<{
+          orderId: string;
+          paymentId: string;
+          requestId: string;
+        }>;
+      }>({
+        name: "ScopedCheckoutWorkflow",
+      });
+
+      const result = await client.run({
+        customerId: "noCtxUser",
+        amount: 100,
+        // No _ctx provided
+      });
+
+      expect(result.requestId).toBe("default");
+      expect(scopeLog).toContain("scope:create:default");
     });
   });
 });
