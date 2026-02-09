@@ -82,6 +82,10 @@ export type {
   InferFactoryName,
   InferFactoryCradle,
   InferFactory,
+  // Scoped factory types (Medusa-inspired)
+  ScopeDisposalStrategy,
+  SagaFactoryConfig,
+  SagaFactory,
 } from "./container.js";
 export {
   createContainerStep,
@@ -90,4 +94,6 @@ export {
   createContainerRestateWorkflow,
   defineContainerWorkflow,
   defineContainerRestateWorkflow,
+  // Scoped factory (Medusa-inspired)
+  defineSagaFactory,
 } from "./container.js";

@@ -11,7 +11,7 @@ Saga pattern implementation for [Restate](https://restate.dev/) durable workflow
 - **Global error registry** - Register error classes that should always trigger compensation
 - **Composable workflows** - Embed workflows within workflows using `runAsStep`
 - **Virtual Object support** - Saga pattern for stateful keyed entities
-- **Dependency Injection** - Container-aware workflows with Awilix for per-request contexts (Directus, etc.)
+- **Dependency Injection** - Container-aware workflows with Awilix for per-request contexts (Directus, etc.) via `defineSagaFactory`
 - **Type-safe** - Full TypeScript support with type inference helpers
 
 ## Installation
@@ -455,9 +455,247 @@ const orderWorkflow = createContainerWorkflow(
 restate.endpoint().bind(orderWorkflow).listen();
 ```
 
+### Scoped Workflow Factory (Recommended for Directus)
+
+The `defineSagaFactory` pattern lets you define scope creation logic once and reuse it across all workflows. This is the recommended approach for Directus and similar applications.
+
+```typescript
+import { createContainer, asValue, asFunction } from "awilix";
+import { defineSagaFactory, StepResponse } from "@kowalski21/restate-saga";
+
+// =============================================================================
+// 1. Define Cradle Types
+// =============================================================================
+
+// Root cradle - app-level singletons
+interface RootCradle {
+  knex: Knex;
+  logger: Logger;
+}
+
+// Scoped cradle - request-specific services
+interface AppCradle extends RootCradle {
+  accountability: Accountability | null;
+  schema: SchemaOverview;
+  ordersService: ItemsService;
+  paymentsService: ItemsService;
+  shipmentsService: ItemsService;
+}
+
+// Context passed in workflow input
+interface DirectusContext {
+  accountability: Accountability | null;
+  schema: SchemaOverview;
+}
+
+// =============================================================================
+// 2. Define Factory (once per application)
+// =============================================================================
+
+export const { createWorkflow, createStep } = defineSagaFactory<RootCradle, AppCradle>({
+  // Called per-workflow invocation to create scoped container
+  createScope: (rootContainer, input: { _ctx?: DirectusContext }) => {
+    const ctx = input._ctx!;
+    const scope = rootContainer.createScope<AppCradle>();
+
+    // Register request-specific values
+    scope.register({
+      accountability: asValue(ctx.accountability),
+      schema: asValue(ctx.schema),
+    });
+
+    // Register services that depend on request context
+    scope.register({
+      ordersService: asFunction(({ knex, schema, accountability }) =>
+        new ItemsService("orders", { knex, schema, accountability })
+      ).scoped(),
+      paymentsService: asFunction(({ knex, schema, accountability }) =>
+        new ItemsService("payments", { knex, schema, accountability })
+      ).scoped(),
+      shipmentsService: asFunction(({ knex, schema, accountability }) =>
+        new ItemsService("shipments", { knex, schema, accountability })
+      ).scoped(),
+    });
+
+    return scope;
+  },
+
+  // Optional: control scope disposal (default: true)
+  disposeScope: true,
+});
+
+// =============================================================================
+// 3. Define Steps (types inferred from factory)
+// =============================================================================
+
+const createOrder = createStep({
+  name: "CreateOrder",
+  run: async (saga, input: { customerId: string; items: unknown[] }) => {
+    // saga.services is AppCradle - fully typed!
+    const order = await saga.services.ordersService.createOne({
+      customer: input.customerId,
+      items: input.items,
+      status: "pending",
+    });
+    saga.services.logger.info(`Order created: ${order.id}`);
+    return new StepResponse({ orderId: order.id }, { orderId: order.id });
+  },
+  compensate: async (saga, data) => {
+    if ("orderId" in data) {
+      await saga.services.ordersService.deleteOne(data.orderId);
+    }
+  },
+});
+
+const processPayment = createStep({
+  name: "ProcessPayment",
+  run: async (saga, input: { orderId: string; amount: number }) => {
+    const payment = await saga.services.paymentsService.createOne({
+      order: input.orderId,
+      amount: input.amount,
+      status: "charged",
+    });
+    return new StepResponse({ paymentId: payment.id }, { paymentId: payment.id });
+  },
+  compensate: async (saga, data) => {
+    if ("paymentId" in data) {
+      await saga.services.paymentsService.deleteOne(data.paymentId);
+    }
+  },
+});
+
+// =============================================================================
+// 4. Define Workflows (clean - no type annotations needed)
+// =============================================================================
+
+interface CheckoutInput {
+  customerId: string;
+  items: unknown[];
+  amount: number;
+  _ctx?: DirectusContext;
+}
+
+export const checkoutWorkflow = createWorkflow(
+  "DirectusCheckout",
+  async (saga, input: CheckoutInput) => {
+    const order = await createOrder(saga, {
+      customerId: input.customerId,
+      items: input.items,
+    });
+
+    const payment = await processPayment(saga, {
+      orderId: order.orderId,
+      amount: input.amount,
+    });
+
+    return { orderId: order.orderId, paymentId: payment.paymentId };
+  }
+);
+
+// =============================================================================
+// 5. Setup (at application startup)
+// =============================================================================
+
+// Create root container with singletons
+const rootContainer = createContainer<RootCradle>();
+rootContainer.register({
+  knex: asValue(database),
+  logger: asValue(logger),
+});
+
+// Instantiate workflow with root container
+const workflow = checkoutWorkflow(rootContainer);
+
+// Register with Restate
+restate.endpoint().bind(workflow).listen(9080);
+
+// =============================================================================
+// 6. Usage (in Directus endpoint)
+// =============================================================================
+
+export default defineEndpoint((router, context) => {
+  router.post("/checkout", async (req, res) => {
+    const result = await restateClient
+      .serviceClient(workflow)
+      .run({
+        customerId: req.body.customerId,
+        items: req.body.items,
+        amount: req.body.amount,
+        _ctx: {
+          accountability: req.accountability,
+          schema: req.schema,
+        },
+      });
+
+    res.json(result);
+  });
+});
+```
+
+#### Scope Disposal Strategies
+
+Control when and how scoped containers are disposed:
+
+```typescript
+const factory = defineSagaFactory<RootCradle, AppCradle>({
+  createScope: ...,
+
+  // Always dispose after workflow (default)
+  disposeScope: true,
+
+  // Never auto-dispose (manage lifecycle manually)
+  disposeScope: false,
+
+  // Only dispose on successful completion
+  disposeScope: "on-success",
+
+  // Custom disposal logic
+  disposeScope: async (scope, error) => {
+    if (!error) {
+      await scope.dispose();
+    }
+    // Log errors, cleanup resources, etc.
+  },
+});
+```
+
+#### Nested Workflows Share Parent Scope
+
+When calling workflow handlers directly, they share the parent's scoped container:
+
+```typescript
+// Define a reusable handler
+const paymentHandler = async (
+  saga: Parameters<Parameters<typeof createWorkflow>[1]>[0],
+  input: { orderId: string; amount: number }
+) => {
+  const payment = await processPayment(saga, input);
+  return { paymentId: payment.paymentId };
+};
+
+// Can also be exposed as a standalone workflow
+export const paymentWorkflow = createWorkflow("Payment", paymentHandler);
+
+// Parent workflow calls handler directly (shares scope)
+export const orderWorkflow = createWorkflow(
+  "Order",
+  async (saga, input: OrderInput) => {
+    const order = await createOrder(saga, input);
+
+    // Direct call - shares parent's scope, compensations join parent stack
+    const payment = await paymentHandler(saga, {
+      orderId: order.orderId,
+      amount: input.amount,
+    });
+
+    return { orderId: order.orderId, paymentId: payment.paymentId };
+  }
+);
+```
+
 ### Factory Pattern (Per-Request Containers)
 
-For Directus where each request has different accountability/schema, use the factory pattern:
+For more control over container creation, use `defineContainerWorkflow` directly:
 
 ```typescript
 import {
@@ -710,12 +948,19 @@ const createLongRunningWorkflow = defineContainerRestateWorkflow<DirectusService
 
 ### Container / Dependency Injection (Awilix)
 
+- `defineSagaFactory<RootCradle, ScopedCradle>(config)` - Create a scoped workflow factory (recommended)
 - `createContainerStep<TCradle>()` - Create a step with DI support
 - `createContainerStepStrict<TCradle>()` - Create a strict step with DI support
 - `createContainerWorkflow(container, name, handler, options?)` - Create a workflow with container
 - `createContainerRestateWorkflow(container, name, run, handlers?, options?)` - Create a Restate Workflow with container
 - `defineContainerWorkflow<TCradle>()` - Factory pattern for per-request containers
 - `defineContainerRestateWorkflow<TCradle>()` - Factory pattern for per-request Restate Workflows
+
+### Scoped Factory Types
+
+- `SagaFactory<RootCradle, ScopedCradle>` - Return type of `defineSagaFactory`
+- `SagaFactoryConfig<RootCradle, ScopedCradle>` - Configuration for `defineSagaFactory`
+- `ScopeDisposalStrategy` - Disposal options: `true` | `false` | `"on-success"` | custom function
 
 ### Container Type Helpers
 
@@ -745,6 +990,7 @@ See the [`examples/`](./examples) directory for complete working examples:
 | [06-error-handling.ts](./examples/06-error-handling.ts) | Error registry, mappers, and handling strategies |
 | [07-container-workflow.ts](./examples/07-container-workflow.ts) | Container-aware workflows with Awilix DI |
 | [08-directus-factory.ts](./examples/08-directus-factory.ts) | Factory pattern for Directus per-request containers |
+| [09-saga-factory.ts](./examples/09-saga-factory.ts) | Scoped workflow factory with `defineSagaFactory` (recommended for Directus) |
 
 To run an example:
 
