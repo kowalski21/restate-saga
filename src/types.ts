@@ -56,6 +56,15 @@ export type WorkflowRetryPolicy = {
   maxInterval?: Duration | number;
 };
 
+/** How Restate should handle a journal mismatch (non-determinism). */
+export type JournalMismatchPolicy = "retry" | "pause" | "fail";
+
+/** Service discovery metadata shown in Restate tooling. */
+export type RestateMetadata = {
+  description?: string;
+  metadata?: Record<string, string>;
+};
+
 /**
  * Error mapper function type.
  * Maps custom errors to TerminalError for non-retryable failures.
@@ -71,7 +80,9 @@ export type ErrorClass = new (...args: any[]) => Error;
 /**
  * Options for saga workflow (service-level).
  */
-export type SagaWorkflowOptions = {
+export type SagaWorkflowOptions = RestateMetadata & {
+  /** Metadata for the main `run` handler. */
+  handlerMetadata?: RestateMetadata;
   /** Default retry policy for all handlers */
   retryPolicy?: WorkflowRetryPolicy;
   /** How long to retain idempotency keys */
@@ -86,6 +97,8 @@ export type SagaWorkflowOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** How to handle journal mismatches. */
+  onJournalMismatchErrors?: JournalMismatchPolicy;
   /** Error classes that are terminal for this workflow only. */
   terminalErrors?: ErrorClass[];
 };
@@ -107,7 +120,9 @@ export type SagaStepOptions = {
 /**
  * Options for Restate workflow (workflow-level).
  */
-export type SagaRestateWorkflowOptions = {
+export type SagaRestateWorkflowOptions = RestateMetadata & {
+  /** Metadata keyed by workflow handler name. */
+  handlerMetadata?: Record<string, RestateMetadata>;
   /** Default retry policy for all handlers */
   retryPolicy?: WorkflowRetryPolicy;
   /** How long to retain idempotency keys */
@@ -122,6 +137,12 @@ export type SagaRestateWorkflowOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** How to handle journal mismatches. */
+  onJournalMismatchErrors?: JournalMismatchPolicy;
+  /** Retention duration for completed workflow state. */
+  workflowRetention?: Duration | number;
+  /** Enable lazy state for workflow invocations. */
+  enableLazyState?: boolean;
   /** Error classes that are terminal for this workflow only. */
   terminalErrors?: ErrorClass[];
 };
@@ -145,7 +166,9 @@ export type SagaObjectContext = {
 /**
  * Options for Restate virtual object (object-level).
  */
-export type SagaVirtualObjectOptions = {
+export type SagaVirtualObjectOptions = RestateMetadata & {
+  /** Metadata keyed by virtual-object handler name. */
+  handlerMetadata?: Record<string, RestateMetadata>;
   /** Default retry policy for all handlers */
   retryPolicy?: WorkflowRetryPolicy;
   /** How long to retain idempotency keys */
@@ -160,6 +183,10 @@ export type SagaVirtualObjectOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** How to handle journal mismatches. */
+  onJournalMismatchErrors?: JournalMismatchPolicy;
+  /** Enable lazy state for object invocations. */
+  enableLazyState?: boolean;
   /** Error classes that are terminal for this object only. */
   terminalErrors?: ErrorClass[];
 };
@@ -257,6 +284,12 @@ export type RestateServiceDefinition = {
   name: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handlers: Record<string, (...args: any[]) => any>;
+};
+
+/** Type constraint for a keyed Restate Workflow definition. */
+export type RestateWorkflowDefinition = RestateServiceDefinition & {
+  /** Compile-time marker used to prevent passing regular services to workflow clients. */
+  readonly __restateWorkflow: true;
 };
 
 /**

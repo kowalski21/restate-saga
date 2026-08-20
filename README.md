@@ -20,7 +20,7 @@ Saga pattern implementation for [Restate](https://restate.dev/) durable workflow
 npm install @kowalski21/restate-saga
 ```
 
-**Peer dependency:** Requires `@restatedev/restate-sdk` ^1.10.0
+**Peer dependency:** Requires `@restatedev/restate-sdk` ^1.16.7 and Node.js 22+
 
 ## Quick Start
 
@@ -259,6 +259,37 @@ retries, service calls, and virtual-object state.
 
 Saga workflows can call other Restate services, Virtual Objects, and workflows using the typed client helpers.
 
+For a real Restate Workflow created with `createSagaRestateWorkflow`, always
+include its workflow ID:
+
+```typescript
+const client = workflowClient(ctx, orderWorkflow, "order-123");
+await client.run(input);
+```
+
+`createSagaWorkflow` creates a regular Restate Service. Use `serviceClient`
+for that type. For compatibility, the old two-argument `workflowClient(ctx,
+definition)` form still calls it as a service; new code should use
+`workflowClient(ctx, definition, workflowId)` for keyed Restate Workflows.
+
+### Signals and invocation references
+
+Restate 1.16 supports durable signals and invocation references:
+
+```typescript
+const approval = await waitForSignal<Approval>(saga.ctx, "approved");
+
+resolveSignal(
+  saga.ctx,
+  targetInvocationId,
+  "approved",
+  { approvedBy: "admin-1" }
+);
+```
+
+These operations are durable Restate operations and should be used from
+workflow or service handlers, not from ordinary application code.
+
 #### Calling a Restate Service
 
 Use `serviceClient` to call regular Restate services from within a saga step:
@@ -340,7 +371,7 @@ const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) =>
 
   // Remote call - if notification fails, it handles its own compensation
   // Order workflow continues or fails independently
-  const notifyClient = workflowClient(saga.ctx, notificationWorkflow);
+  const notifyClient = workflowClient(saga.ctx, notificationWorkflow, input.orderId);
   await notifyClient.run({ userId: input.userId, message: "Order created" });
 
   return { orderId: order.id };
@@ -377,15 +408,15 @@ const completeOrder = createSagaStep({
   run: async ({ ctx, input }) => {
     // Fire-and-forget: send email notification
     const emailService = serviceSendClient(ctx, emailService);
-    await emailService.send({ to: input.email, template: "order-complete" });
+    emailService.send({ to: input.email, template: "order-complete" });
 
     // Fire-and-forget: trigger analytics workflow
-    const analytics = workflowSendClient(ctx, analyticsWorkflow);
-    await analytics.run({ event: "order_completed", orderId: input.orderId });
+    const analytics = workflowSendClient(ctx, analyticsWorkflow, input.orderId);
+    const analyticsHandle = analytics.run({ event: "order_completed", orderId: input.orderId });
 
     // Fire-and-forget: update user stats object
     const userStats = objectSendClient(ctx, userStatsObject, input.userId);
-    await userStats.incrementOrderCount();
+    userStats.incrementOrderCount();
 
     return new StepResponse({ completed: true }, null);
   },
@@ -1007,10 +1038,17 @@ const createLongRunningWorkflow = defineContainerRestateWorkflow<DirectusService
 - `InferServiceType<T>` - Extract service type for use with external clients
 - `serviceClient(ctx, definition)` - Create a typed client for Restate services
 - `serviceSendClient(ctx, definition)` - Create a fire-and-forget client for Restate services
-- `workflowClient(ctx, definition)` - Create a typed client for saga workflows
-- `workflowSendClient(ctx, definition)` - Create a fire-and-forget client for saga workflows
+- `workflowClient(ctx, definition, workflowId)` - Create a typed client for a keyed Restate Workflow
+- `workflowSendClient(ctx, definition, workflowId)` - Create a fire-and-forget client for a keyed Restate Workflow
 - `objectClient(ctx, definition, key)` - Create a typed client for Virtual Objects
 - `objectSendClient(ctx, definition, key)` - Create a fire-and-forget client for Virtual Objects
+- `scopedServiceClient(ctx, scope, definition)` - Create a scoped service client
+- `scopedWorkflowClient(ctx, scope, definition, workflowId)` - Create a scoped workflow client
+- `scopedObjectClient(ctx, scope, definition, key)` - Create a scoped Virtual Object client
+- `waitForSignal(ctx, name)` - Wait for a signal on the current invocation
+- `invocation(ctx, invocationId)` - Reference another invocation
+- `resolveSignal(ctx, invocationId, name, payload?)` - Resolve another invocation's signal
+- `rejectSignal(ctx, invocationId, name, reason)` - Reject another invocation's signal
 
 ### Container / Dependency Injection (Awilix)
 

@@ -11,6 +11,8 @@ export type {
   Duration,
   StepRetryPolicy,
   WorkflowRetryPolicy,
+  JournalMismatchPolicy,
+  RestateMetadata,
   ErrorMapper,
   ErrorClass,
   SagaWorkflowOptions,
@@ -23,6 +25,7 @@ export type {
   AnySagaContext,
   InferServiceType,
   InferObjectType,
+  RestateWorkflowDefinition,
 } from "./types.js";
 
 // Error Registry
@@ -57,7 +60,14 @@ export { createSagaWorkflow, createSagaRestateWorkflow } from "./workflows.js";
 export { createSagaVirtualObject } from "./virtual-objects.js";
 
 // Client Helpers
-export type { WorkflowInput, WorkflowOutput, SagaClient, SagaSendClient } from "./clients.js";
+export type {
+  WorkflowInput,
+  WorkflowOutput,
+  SagaClient,
+  SagaSendClient,
+  SagaWorkflowClient,
+  SagaWorkflowSendClient,
+} from "./clients.js";
 export {
   workflowClient,
   workflowSendClient,
@@ -65,6 +75,16 @@ export {
   serviceSendClient,
   objectClient,
   objectSendClient,
+  scopedServiceClient,
+  scopedServiceSendClient,
+  scopedWorkflowClient,
+  scopedWorkflowSendClient,
+  scopedObjectClient,
+  scopedObjectSendClient,
+  waitForSignal,
+  invocation,
+  resolveSignal,
+  rejectSignal,
 } from "./clients.js";
 
 // Nested Sagas

@@ -134,34 +134,41 @@ export function createSagaWorkflow<Name extends string, Input, Output>(
         inactivityTimeout: options.inactivityTimeout,
         abortTimeout: options.abortTimeout,
         ingressPrivate: options.ingressPrivate,
+        onJournalMismatchErrors: options.onJournalMismatchErrors,
         asTerminalError: options.asTerminalError,
       }
     : undefined;
 
+  const runHandler = async (ctx: restate.Context, input: Input) => {
+    const saga: SagaContext = {
+      ctx,
+      compensations: [],
+    };
+
+    try {
+      return await handler(saga, input);
+    } catch (e) {
+      const terminalError = resolveTerminalError(
+        e,
+        options?.asTerminalError,
+        options?.terminalErrors
+      );
+      const failure = terminalError ?? e;
+      if (failure instanceof restate.TerminalError) {
+        await runCompensations(saga.compensations);
+      }
+      throw failure;
+    }
+  };
+
   const service = restate.service({
     name,
+    description: options?.description,
+    metadata: options?.metadata,
     handlers: {
-      run: async (ctx: restate.Context, input: Input) => {
-        const saga: SagaContext = {
-          ctx,
-          compensations: [],
-        };
-
-        try {
-          return await handler(saga, input);
-        } catch (e) {
-          const terminalError = resolveTerminalError(
-            e,
-            options?.asTerminalError,
-            options?.terminalErrors
-          );
-          const failure = terminalError ?? e;
-          if (failure instanceof restate.TerminalError) {
-            await runCompensations(saga.compensations);
-          }
-          throw failure;
-        }
-      },
+      run: options?.handlerMetadata
+        ? restate.handlers.handler(options.handlerMetadata, runHandler)
+        : runHandler,
     },
     options: serviceOptions,
   });
@@ -182,6 +189,7 @@ export function createSagaWorkflow<Name extends string, Input, Output>(
  * Explicitly types the handlers so external clients can infer method signatures.
  */
 export type SagaRestateWorkflowService<Name extends string, Input, Output> = {
+  readonly __restateWorkflow: true;
   name: Name;
   handlers: {
     run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
@@ -273,34 +281,43 @@ export function createSagaRestateWorkflow<
         inactivityTimeout: options.inactivityTimeout,
         abortTimeout: options.abortTimeout,
         ingressPrivate: options.ingressPrivate,
+        onJournalMismatchErrors: options.onJournalMismatchErrors,
+        workflowRetention: options.workflowRetention,
+        enableLazyState: options.enableLazyState,
         asTerminalError: options.asTerminalError,
       }
     : undefined;
 
+  const runHandler = async (ctx: restate.WorkflowContext, input: Input) => {
+    const saga: SagaWorkflowContext = {
+      ctx,
+      compensations: [],
+    };
+
+    try {
+      return await run(saga, ctx, input);
+    } catch (e) {
+      const terminalError = resolveTerminalError(
+        e,
+        options?.asTerminalError,
+        options?.terminalErrors
+      );
+      const failure = terminalError ?? e;
+      if (failure instanceof restate.TerminalError) {
+        await runCompensations(saga.compensations);
+      }
+      throw failure;
+    }
+  };
+
   const workflow = restate.workflow({
     name,
+    description: options?.description,
+    metadata: options?.metadata,
     handlers: {
-      run: async (ctx: restate.WorkflowContext, input: Input) => {
-        const saga: SagaWorkflowContext = {
-          ctx,
-          compensations: [],
-        };
-
-        try {
-          return await run(saga, ctx, input);
-        } catch (e) {
-          const terminalError = resolveTerminalError(
-            e,
-            options?.asTerminalError,
-            options?.terminalErrors
-          );
-          const failure = terminalError ?? e;
-          if (failure instanceof restate.TerminalError) {
-            await runCompensations(saga.compensations);
-          }
-          throw failure;
-        }
-      },
+      run: options?.handlerMetadata?.run
+        ? restate.handlers.workflow.workflow(options.handlerMetadata.run, runHandler)
+        : runHandler,
       ...handlers,
     },
     options: workflowOptions,

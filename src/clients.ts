@@ -1,5 +1,8 @@
 import * as restate from "@restatedev/restate-sdk";
-import type { RestateServiceDefinition, RestateObjectDefinition } from "./types.js";
+import type {
+  RestateServiceDefinition,
+  RestateObjectDefinition,
+} from "./types.js";
 
 /**
  * Type helper to extract input type from a saga workflow.
@@ -41,11 +44,18 @@ export type SagaClient<T extends RestateServiceDefinition> = restate.Client<T["h
 /** The typed fire-and-forget client returned by the in-handler helpers. */
 export type SagaSendClient<T extends RestateServiceDefinition> = restate.SendClient<T["handlers"]>;
 
+/** A typed client for a keyed Restate Workflow. */
+export type SagaWorkflowClient<T extends RestateServiceDefinition> = SagaClient<T>;
+
+/** A typed send client for a keyed Restate Workflow. */
+export type SagaWorkflowSendClient<T extends RestateServiceDefinition> = SagaSendClient<T>;
+
 /**
- * Create a typed service client for calling another saga workflow.
+ * Create a typed client for calling a keyed Restate Workflow.
  *
  * @param ctx - The Restate context
- * @param definition - The workflow service definition (import the actual workflow)
+ * @param definition - The workflow definition (import the actual workflow)
+ * @param key - The workflow ID
  * @returns A typed client for calling the workflow
  *
  * @example
@@ -53,23 +63,40 @@ export type SagaSendClient<T extends RestateServiceDefinition> = restate.SendCli
  * import { paymentWorkflow } from "./workflows/payment.js";
  *
  * // In a saga step
- * const client = workflowClient(ctx, paymentWorkflow);
+ * const client = workflowClient(ctx, paymentWorkflow, "payment-123");
  * const result = await client.run({ amount: 100, customerId: "123" });
  * ```
+ *
+ * Omitting `key` is supported for backward compatibility and uses the
+ * previous service-style client behavior.
  */
 export function workflowClient<T extends RestateServiceDefinition>(
   ctx: restate.Context,
   definition: T
+): SagaClient<T>;
+export function workflowClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key: string
+): SagaWorkflowClient<T>;
+export function workflowClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key?: string
 ) {
-  // Cast required: Restate SDK's serviceClient expects internal ServiceDefinitionFrom type,
-  // but SagaWorkflowService extends the base ServiceDefinition with runAsStep capability.
-  // The cast preserves runtime behavior while the generic constraint ensures type safety for callers.
+  if (key === undefined) {
+    /** @deprecated Legacy saga workflows are regular Restate services. */
+    return ctx.serviceClient(definition as any) as SagaClient<T>;
+  }
+
+  // Cast required because the SDK's definition type does not structurally retain
+  // the handler map in all module-resolution modes.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceClient(definition as any) as SagaClient<T>;
+  return ctx.workflowClient(definition as any, key) as SagaWorkflowClient<T>;
 }
 
 /**
- * Create a typed send client for fire-and-forget calls to another saga workflow.
+ * Create a typed send client for fire-and-forget calls to a keyed Restate Workflow.
  *
  * @param ctx - The Restate context
  * @param definition - The workflow service definition
@@ -80,16 +107,35 @@ export function workflowClient<T extends RestateServiceDefinition>(
  * import { notificationWorkflow } from "./workflows/notification.js";
  *
  * // Fire and forget - don't wait for completion
- * const client = workflowSendClient(ctx, notificationWorkflow);
- * await client.run({ userId: "123", message: "Hello" });
+ * const client = workflowSendClient(ctx, notificationWorkflow, "notification-123");
+ * const handle = client.run({ userId: "123", message: "Hello" });
+ * // If needed, await handle.invocationId to get the accepted invocation ID.
  * ```
+ *
+ * Omitting `key` is supported for backward compatibility and uses the
+ * previous service-style client behavior.
  */
 export function workflowSendClient<T extends RestateServiceDefinition>(
   ctx: restate.Context,
   definition: T
+): SagaSendClient<T>;
+export function workflowSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key: string
+): SagaWorkflowSendClient<T>;
+export function workflowSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  definition: T,
+  key?: string
 ) {
+  if (key === undefined) {
+    /** @deprecated Legacy saga workflows are regular Restate services. */
+    return ctx.serviceSendClient(definition as any) as SagaSendClient<T>;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceSendClient(definition as any) as SagaSendClient<T>;
+  return ctx.workflowSendClient(definition as any, key) as SagaWorkflowSendClient<T>;
 }
 
 /**
@@ -170,4 +216,92 @@ export function objectSendClient<T extends RestateObjectDefinition>(
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return ctx.objectSendClient(definition as any, key) as SagaSendClient<T>;
+}
+
+/** Create a typed service client routed through a Restate scope. */
+export function scopedServiceClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T
+) {
+  return ctx.scope(scope).serviceClient(definition as any) as SagaClient<T>;
+}
+
+/** Create a typed send client routed through a Restate scope. */
+export function scopedServiceSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T
+) {
+  return ctx.scope(scope).serviceSendClient(definition as any) as SagaSendClient<T>;
+}
+
+/** Create a typed workflow client routed through a Restate scope. */
+export function scopedWorkflowClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T,
+  key: string
+) {
+  return ctx.scope(scope).workflowClient(definition as any, key) as SagaWorkflowClient<T>;
+}
+
+/** Create a typed workflow send client routed through a Restate scope. */
+export function scopedWorkflowSendClient<T extends RestateServiceDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T,
+  key: string
+) {
+  return ctx.scope(scope).workflowSendClient(definition as any, key) as SagaWorkflowSendClient<T>;
+}
+
+/** Create a typed virtual-object client routed through a Restate scope. */
+export function scopedObjectClient<T extends RestateObjectDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T,
+  key: string
+) {
+  return ctx.scope(scope).objectClient(definition as any, key) as SagaClient<T>;
+}
+
+/** Create a typed virtual-object send client routed through a Restate scope. */
+export function scopedObjectSendClient<T extends RestateObjectDefinition>(
+  ctx: restate.Context,
+  scope: string,
+  definition: T,
+  key: string
+) {
+  return ctx.scope(scope).objectSendClient(definition as any, key) as SagaSendClient<T>;
+}
+
+/** Wait for a named signal on the current invocation. */
+export function waitForSignal<T>(ctx: restate.Context, name: string) {
+  return ctx.signal<T>(name);
+}
+
+/** Get a reference used to attach to, cancel, or signal another invocation. */
+export function invocation(ctx: restate.Context, invocationId: restate.InvocationId) {
+  return ctx.invocation(invocationId);
+}
+
+/** Resolve a named signal on another invocation. */
+export function resolveSignal<T>(
+  ctx: restate.Context,
+  invocationId: restate.InvocationId,
+  name: string,
+  payload?: T
+): void {
+  ctx.invocation(invocationId).signal<T>(name).resolve(payload);
+}
+
+/** Reject a named signal on another invocation. */
+export function rejectSignal(
+  ctx: restate.Context,
+  invocationId: restate.InvocationId,
+  name: string,
+  reason: string | restate.TerminalError
+): void {
+  ctx.invocation(invocationId).signal(name).reject(reason);
 }

@@ -637,39 +637,46 @@ export function createContainerWorkflow<TCradle extends object, Name extends str
         inactivityTimeout: options.inactivityTimeout,
         abortTimeout: options.abortTimeout,
         ingressPrivate: options.ingressPrivate,
+        onJournalMismatchErrors: options.onJournalMismatchErrors,
         asTerminalError: options.asTerminalError,
       }
     : undefined;
 
+  const runHandler = async (ctx: restate.Context, input: Input) => {
+    // Resolve cradle once per workflow invocation
+    const services = container.cradle;
+
+    const saga: ContainerSagaContext<TCradle, typeof container> = {
+      ctx,
+      compensations: [],
+      services,
+      container,
+    };
+
+    try {
+      return await handler(saga, input);
+    } catch (e) {
+      const terminalError = resolveTerminalError(
+        e,
+        options?.asTerminalError,
+        options?.terminalErrors
+      );
+      const failure = terminalError ?? e;
+      if (failure instanceof restate.TerminalError) {
+        await runCompensations(saga.compensations);
+      }
+      throw failure;
+    }
+  };
+
   const service = restate.service({
     name,
+    description: options?.description,
+    metadata: options?.metadata,
     handlers: {
-      run: async (ctx: restate.Context, input: Input) => {
-        // Resolve cradle once per workflow invocation
-        const services = container.cradle;
-
-        const saga: ContainerSagaContext<TCradle, typeof container> = {
-          ctx,
-          compensations: [],
-          services,
-          container,
-        };
-
-        try {
-          return await handler(saga, input);
-        } catch (e) {
-          const terminalError = resolveTerminalError(
-            e,
-            options?.asTerminalError,
-            options?.terminalErrors
-          );
-          const failure = terminalError ?? e;
-          if (failure instanceof restate.TerminalError) {
-            await runCompensations(saga.compensations);
-          }
-          throw failure;
-        }
-      },
+      run: options?.handlerMetadata
+        ? restate.handlers.handler(options.handlerMetadata, runHandler)
+        : runHandler,
     },
     options: serviceOptions,
   });
@@ -685,6 +692,7 @@ export function createContainerWorkflow<TCradle extends object, Name extends str
  * Return type for createContainerRestateWorkflow.
  */
 export type ContainerRestateWorkflowService<Name extends string, Input, Output, TCradle extends object> = {
+  readonly __restateWorkflow: true;
   name: Name;
   handlers: {
     run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
@@ -750,38 +758,47 @@ export function createContainerRestateWorkflow<
         inactivityTimeout: options.inactivityTimeout,
         abortTimeout: options.abortTimeout,
         ingressPrivate: options.ingressPrivate,
+        onJournalMismatchErrors: options.onJournalMismatchErrors,
+        workflowRetention: options.workflowRetention,
+        enableLazyState: options.enableLazyState,
         asTerminalError: options.asTerminalError,
       }
     : undefined;
 
+  const runHandler = async (ctx: restate.WorkflowContext, input: Input) => {
+    const services = container.cradle;
+
+    const saga: ContainerWorkflowContext<TCradle, typeof container> = {
+      ctx,
+      compensations: [],
+      services,
+      container,
+    };
+
+    try {
+      return await run(saga, ctx, input);
+    } catch (e) {
+      const terminalError = resolveTerminalError(
+        e,
+        options?.asTerminalError,
+        options?.terminalErrors
+      );
+      const failure = terminalError ?? e;
+      if (failure instanceof restate.TerminalError) {
+        await runCompensations(saga.compensations);
+      }
+      throw failure;
+    }
+  };
+
   const workflow = restate.workflow({
     name,
+    description: options?.description,
+    metadata: options?.metadata,
     handlers: {
-      run: async (ctx: restate.WorkflowContext, input: Input) => {
-        const services = container.cradle;
-
-        const saga: ContainerWorkflowContext<TCradle, typeof container> = {
-          ctx,
-          compensations: [],
-          services,
-          container,
-        };
-
-        try {
-          return await run(saga, ctx, input);
-        } catch (e) {
-          const terminalError = resolveTerminalError(
-            e,
-            options?.asTerminalError,
-            options?.terminalErrors
-          );
-          const failure = terminalError ?? e;
-          if (failure instanceof restate.TerminalError) {
-            await runCompensations(saga.compensations);
-          }
-          throw failure;
-        }
-      },
+      run: options?.handlerMetadata?.run
+        ? restate.handlers.workflow.workflow(options.handlerMetadata.run, runHandler)
+        : runHandler,
       ...handlers,
     },
     options: workflowOptions,
@@ -1104,54 +1121,61 @@ export function defineSagaFactory<RootCradle extends object, ScopedCradle extend
               inactivityTimeout: options.inactivityTimeout,
               abortTimeout: options.abortTimeout,
               ingressPrivate: options.ingressPrivate,
+              onJournalMismatchErrors: options.onJournalMismatchErrors,
               asTerminalError: options.asTerminalError,
             }
           : undefined;
 
+        const runHandler = async (ctx: restate.Context, input: Input) => {
+          // Create scoped container for this invocation
+          let scopedContainer: AwilixContainer<ScopedCradle>;
+          try {
+            scopedContainer = createScope(rootContainer, input);
+          } catch (err) {
+            // Scope creation failures are terminal - no point retrying
+            throw new restate.TerminalError(
+              `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+
+          const services = scopedContainer.cradle;
+
+          const saga: ContainerSagaContext<ScopedCradle, typeof scopedContainer> = {
+            ctx,
+            compensations: [],
+            services,
+            container: scopedContainer,
+          };
+
+          let error: Error | undefined;
+
+          try {
+            return await handler(saga, input);
+          } catch (e) {
+            error = e instanceof Error ? e : new Error(String(e));
+            const terminalError = resolveTerminalError(
+              e,
+              options?.asTerminalError,
+              options?.terminalErrors
+            );
+            const failure = terminalError ?? e;
+            if (failure instanceof restate.TerminalError) {
+              await runCompensations(saga.compensations);
+            }
+            throw failure;
+          } finally {
+            await handleScopeDisposal(scopedContainer, disposeScope, error);
+          }
+        };
+
         const service = restate.service({
           name,
+          description: options?.description,
+          metadata: options?.metadata,
           handlers: {
-            run: async (ctx: restate.Context, input: Input) => {
-              // Create scoped container for this invocation
-              let scopedContainer: AwilixContainer<ScopedCradle>;
-              try {
-                scopedContainer = createScope(rootContainer, input);
-              } catch (err) {
-                // Scope creation failures are terminal - no point retrying
-                throw new restate.TerminalError(
-                  `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
-                );
-              }
-
-              const services = scopedContainer.cradle;
-
-              const saga: ContainerSagaContext<ScopedCradle, typeof scopedContainer> = {
-                ctx,
-                compensations: [],
-                services,
-                container: scopedContainer,
-              };
-
-              let error: Error | undefined;
-
-              try {
-                return await handler(saga, input);
-              } catch (e) {
-                error = e instanceof Error ? e : new Error(String(e));
-                const terminalError = resolveTerminalError(
-                  e,
-                  options?.asTerminalError,
-                  options?.terminalErrors
-                );
-                const failure = terminalError ?? e;
-                if (failure instanceof restate.TerminalError) {
-                  await runCompensations(saga.compensations);
-                }
-                throw failure;
-              } finally {
-                await handleScopeDisposal(scopedContainer, disposeScope, error);
-              }
-            },
+            run: options?.handlerMetadata
+              ? restate.handlers.handler(options.handlerMetadata, runHandler)
+              : runHandler,
           },
           options: serviceOptions,
         });
@@ -1194,53 +1218,62 @@ export function defineSagaFactory<RootCradle extends object, ScopedCradle extend
               inactivityTimeout: options.inactivityTimeout,
               abortTimeout: options.abortTimeout,
               ingressPrivate: options.ingressPrivate,
+              onJournalMismatchErrors: options.onJournalMismatchErrors,
+              workflowRetention: options.workflowRetention,
+              enableLazyState: options.enableLazyState,
               asTerminalError: options.asTerminalError,
             }
           : undefined;
 
+        const runHandler = async (ctx: restate.WorkflowContext, input: Input) => {
+          // Create scoped container for this invocation
+          let scopedContainer: AwilixContainer<ScopedCradle>;
+          try {
+            scopedContainer = createScope(rootContainer, input);
+          } catch (err) {
+            throw new restate.TerminalError(
+              `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+
+          const services = scopedContainer.cradle;
+
+          const saga: ContainerWorkflowContext<ScopedCradle, typeof scopedContainer> = {
+            ctx,
+            compensations: [],
+            services,
+            container: scopedContainer,
+          };
+
+          let error: Error | undefined;
+
+          try {
+            return await run(saga, ctx, input);
+          } catch (e) {
+            error = e instanceof Error ? e : new Error(String(e));
+            const terminalError = resolveTerminalError(
+              e,
+              options?.asTerminalError,
+              options?.terminalErrors
+            );
+            const failure = terminalError ?? e;
+            if (failure instanceof restate.TerminalError) {
+              await runCompensations(saga.compensations);
+            }
+            throw failure;
+          } finally {
+            await handleScopeDisposal(scopedContainer, disposeScope, error);
+          }
+        };
+
         const workflow = restate.workflow({
           name,
+          description: options?.description,
+          metadata: options?.metadata,
           handlers: {
-            run: async (ctx: restate.WorkflowContext, input: Input) => {
-              // Create scoped container for this invocation
-              let scopedContainer: AwilixContainer<ScopedCradle>;
-              try {
-                scopedContainer = createScope(rootContainer, input);
-              } catch (err) {
-                throw new restate.TerminalError(
-                  `Failed to create scoped container: ${err instanceof Error ? err.message : String(err)}`
-                );
-              }
-
-              const services = scopedContainer.cradle;
-
-              const saga: ContainerWorkflowContext<ScopedCradle, typeof scopedContainer> = {
-                ctx,
-                compensations: [],
-                services,
-                container: scopedContainer,
-              };
-
-              let error: Error | undefined;
-
-              try {
-                return await run(saga, ctx, input);
-              } catch (e) {
-                error = e instanceof Error ? e : new Error(String(e));
-                const terminalError = resolveTerminalError(
-                  e,
-                  options?.asTerminalError,
-                  options?.terminalErrors
-                );
-                const failure = terminalError ?? e;
-                if (failure instanceof restate.TerminalError) {
-                  await runCompensations(saga.compensations);
-                }
-                throw failure;
-              } finally {
-                await handleScopeDisposal(scopedContainer, disposeScope, error);
-              }
-            },
+            run: options?.handlerMetadata?.run
+              ? restate.handlers.workflow.workflow(options.handlerMetadata.run, runHandler)
+              : runHandler,
             ...handlers,
           },
           options: workflowOptions,

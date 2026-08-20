@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Upgraded Restate TypeScript SDK support to 1.16.7.
+- `workflowClient` and `workflowSendClient` support keyed Restate Workflows with a workflow ID while preserving the legacy two-argument service-style call.
+- Added scoped clients, signal/invocation helpers, journal-mismatch handling, workflow retention, lazy state, and service metadata.
+
 ## [0.3.0] - 2026-02-09
 
 ### Added

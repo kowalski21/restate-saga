@@ -103,6 +103,8 @@ export function createSagaVirtualObject<
         inactivityTimeout: options.inactivityTimeout,
         abortTimeout: options.abortTimeout,
         ingressPrivate: options.ingressPrivate,
+        onJournalMismatchErrors: options.onJournalMismatchErrors,
+        enableLazyState: options.enableLazyState,
         asTerminalError: options.asTerminalError,
       }
     : undefined;
@@ -114,7 +116,7 @@ export function createSagaVirtualObject<
   > = {};
 
   for (const [handlerName, handler] of Object.entries(handlers)) {
-    wrappedHandlers[handlerName] = async (ctx: restate.ObjectContext, input: any) => {
+    const wrappedHandler = async (ctx: restate.ObjectContext, input: any) => {
       const saga: SagaObjectContext = {
         ctx,
         compensations: [],
@@ -135,6 +137,12 @@ export function createSagaVirtualObject<
         throw failure;
       }
     };
+    wrappedHandlers[handlerName] = options?.handlerMetadata?.[handlerName]
+      ? restate.handlers.object.exclusive(
+          options.handlerMetadata[handlerName],
+          wrappedHandler
+        )
+      : wrappedHandler;
   }
 
   // Wrap shared handlers (no saga support, just pass through)
@@ -142,12 +150,17 @@ export function createSagaVirtualObject<
 
   if (sharedHandlers) {
     for (const [handlerName, handler] of Object.entries(sharedHandlers)) {
-      wrappedSharedHandlers[handlerName] = restate.handlers.object.shared(handler);
+      const metadata = options?.handlerMetadata?.[handlerName];
+      wrappedSharedHandlers[handlerName] = metadata
+        ? restate.handlers.object.shared(metadata, handler)
+        : restate.handlers.object.shared(handler);
     }
   }
 
   return restate.object({
     name,
+    description: options?.description,
+    metadata: options?.metadata,
     handlers: {
       ...wrappedHandlers,
       ...wrappedSharedHandlers,
