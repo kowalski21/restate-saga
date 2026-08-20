@@ -86,6 +86,8 @@ export type SagaWorkflowOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** Error classes that are terminal for this workflow only. */
+  terminalErrors?: ErrorClass[];
 };
 
 /**
@@ -98,6 +100,8 @@ export type SagaStepOptions = {
   compensationRetry?: StepRetryPolicy;
   /** Map custom errors to TerminalError (non-retryable) at step level */
   asTerminalError?: ErrorMapper;
+  /** Error classes that are terminal for this step only. */
+  terminalErrors?: ErrorClass[];
 };
 
 /**
@@ -118,6 +122,8 @@ export type SagaRestateWorkflowOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** Error classes that are terminal for this workflow only. */
+  terminalErrors?: ErrorClass[];
 };
 
 /**
@@ -154,6 +160,8 @@ export type SagaVirtualObjectOptions = {
   ingressPrivate?: boolean;
   /** Map custom errors to TerminalError (non-retryable) */
   asTerminalError?: ErrorMapper;
+  /** Error classes that are terminal for this object only. */
+  terminalErrors?: ErrorClass[];
 };
 
 /**

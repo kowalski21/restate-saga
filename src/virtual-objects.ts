@@ -5,6 +5,8 @@ import type {
   SagaVirtualObjectOptions,
   WorkflowRetryPolicy,
 } from "./types.js";
+import { resolveTerminalError } from "./error-registry.js";
+import { runCompensations } from "./compensation.js";
 
 /**
  * Convert WorkflowRetryPolicy to Restate service options format.
@@ -121,12 +123,16 @@ export function createSagaVirtualObject<
       try {
         return await handler(saga, ctx, input);
       } catch (e) {
-        if (e instanceof restate.TerminalError) {
-          for (const compensate of saga.compensations.reverse()) {
-            await compensate();
-          }
+        const terminalError = resolveTerminalError(
+          e,
+          options?.asTerminalError,
+          options?.terminalErrors
+        );
+        const failure = terminalError ?? e;
+        if (failure instanceof restate.TerminalError) {
+          await runCompensations(saga.compensations);
         }
-        throw e;
+        throw failure;
       }
     };
   }

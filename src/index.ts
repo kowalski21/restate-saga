@@ -36,7 +36,18 @@ export {
 } from "./error-registry.js";
 
 // Steps
-export { StepResponse, createSagaStep, createSagaStepStrict } from "./steps.js";
+export {
+  StepResponse,
+  success,
+  failure,
+  createSagaStep,
+  createSagaStepStrict,
+} from "./steps.js";
+
+// Testing / advanced composition
+export { runCompensations } from "./compensation.js";
+export { createTestSagaContext } from "./testing.js";
+export type { TestSagaContext } from "./testing.js";
 
 // Workflows
 export type { SagaWorkflowService, SagaRestateWorkflowService } from "./workflows.js";
@@ -46,7 +57,7 @@ export { createSagaWorkflow, createSagaRestateWorkflow } from "./workflows.js";
 export { createSagaVirtualObject } from "./virtual-objects.js";
 
 // Client Helpers
-export type { WorkflowInput, WorkflowOutput } from "./clients.js";
+export type { WorkflowInput, WorkflowOutput, SagaClient, SagaSendClient } from "./clients.js";
 export {
   workflowClient,
   workflowSendClient,

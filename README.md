@@ -76,6 +76,38 @@ export const checkoutWorkflow = createSagaWorkflow(
 
 ## Core Concepts
 
+### A shorter step API
+
+`success` and `failure` are convenience wrappers around `StepResponse` and
+preserve the same type inference:
+
+```typescript
+import { createSagaStep, success, failure } from "@kowalski21/restate-saga";
+
+const reserve = createSagaStep({
+  name: "ReserveInventory",
+  run: async ({ input }) => {
+    if (input.quantity <= 0) return failure("Quantity must be positive", null);
+    return success({ reservationId: "res_123" }, { reservationId: "res_123" });
+  },
+});
+```
+
+Use explicit `StepResponse` when the longer form makes a complex response
+clearer; both APIs are equivalent.
+
+### Choosing a compensation mode
+
+| Situation | API |
+| --- | --- |
+| A forward action may partially change external state | `createSagaStep` |
+| Compensation data exists only after success | `createSagaStepStrict` |
+| Validation or read-only work | Either API without `compensate` |
+| A failed action still needs rollback data | `failure(message, data)` or `StepResponse.permanentFailure()` |
+
+Compensation runs only for terminal failures. Retryable errors are retried by
+Restate before the saga is considered failed.
+
 ### Saga Pattern
 
 The saga pattern manages distributed transactions where each step has a corresponding compensation (undo) action. If a later step fails, all earlier compensations run in reverse order.
@@ -165,6 +197,21 @@ const myStep = createSagaStep({
 });
 ```
 
+For library or request-local behavior, prefer workflow- or step-local error
+configuration so global process state is not required:
+
+```typescript
+import * as restate from "@restatedev/restate-sdk";
+
+const workflow = createSagaWorkflow("Checkout", handler, {
+  terminalErrors: [ValidationError],
+  asTerminalError: (error) =>
+    error instanceof DuplicateError
+      ? new restate.TerminalError(error.message)
+      : undefined,
+});
+```
+
 ### Composing Workflows
 
 Use `runAsStep` to embed a workflow within another, sharing the compensation context:
@@ -188,6 +235,25 @@ const orderWorkflow = createSagaWorkflow("OrderWorkflow", async (saga, input) =>
   return { orderId: order.id, paymentId: payment.paymentId };
 });
 ```
+
+`runAsStep` shares the parent context, services, and compensation stack. It is
+an in-process composition operation; use `workflowClient` or
+`serviceClient` when the call should be a separate durable Restate invocation.
+
+### Fast unit tests
+
+Most step behavior can be tested without starting Restate:
+
+```typescript
+import { createTestSagaContext } from "@kowalski21/restate-saga";
+
+const saga = createTestSagaContext();
+await reserve(saga, { productId: "p1", quantity: 1 });
+await saga.compensate();
+```
+
+Use the Restate test environment for integration coverage of journaling,
+retries, service calls, and virtual-object state.
 
 ### Calling Restate Services
 

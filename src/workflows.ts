@@ -7,6 +7,8 @@ import type {
   WorkflowRetryPolicy,
   AnySagaContext,
 } from "./types.js";
+import { resolveTerminalError } from "./error-registry.js";
+import { runCompensations } from "./compensation.js";
 
 /**
  * Convert WorkflowRetryPolicy to Restate service options format.
@@ -33,6 +35,8 @@ export type SagaWorkflowService<Name extends string, Input, Output> = {
   handlers: {
     run: (ctx: restate.Context, input: Input) => Promise<Output>;
   };
+  /** Underlying Restate service metadata, when exposed by the SDK version. */
+  service?: object;
 } & {
   /**
    * Run this workflow as a step in a parent saga.
@@ -146,12 +150,16 @@ export function createSagaWorkflow<Name extends string, Input, Output>(
         try {
           return await handler(saga, input);
         } catch (e) {
-          if (e instanceof restate.TerminalError) {
-            for (const compensate of saga.compensations.reverse()) {
-              await compensate();
-            }
+          const terminalError = resolveTerminalError(
+            e,
+            options?.asTerminalError,
+            options?.terminalErrors
+          );
+          const failure = terminalError ?? e;
+          if (failure instanceof restate.TerminalError) {
+            await runCompensations(saga.compensations);
           }
-          throw e;
+          throw failure;
         }
       },
     },
@@ -178,6 +186,8 @@ export type SagaRestateWorkflowService<Name extends string, Input, Output> = {
   handlers: {
     run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
   };
+  /** Underlying Restate workflow metadata, when exposed by the SDK version. */
+  workflow?: object;
 } & {
   /**
    * Run this workflow as a step in a parent Restate Workflow saga.
@@ -279,12 +289,16 @@ export function createSagaRestateWorkflow<
         try {
           return await run(saga, ctx, input);
         } catch (e) {
-          if (e instanceof restate.TerminalError) {
-            for (const compensate of saga.compensations.reverse()) {
-              await compensate();
-            }
+          const terminalError = resolveTerminalError(
+            e,
+            options?.asTerminalError,
+            options?.terminalErrors
+          );
+          const failure = terminalError ?? e;
+          if (failure instanceof restate.TerminalError) {
+            await runCompensations(saga.compensations);
           }
-          throw e;
+          throw failure;
         }
       },
       ...handlers,

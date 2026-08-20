@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 import { StepResponse } from "./steps.js";
 import { resolveTerminalError } from "./error-registry.js";
+import { runCompensations } from "./compensation.js";
 
 /**
  * Extended saga context that includes resolved container services.
@@ -438,7 +439,11 @@ export function createContainerStep<TCradle extends object>() {
           try {
             return await config.run(saga, input);
           } catch (err) {
-            const terminalError = resolveTerminalError(err, errorMapper);
+            const terminalError = resolveTerminalError(
+              err,
+              errorMapper,
+              config.options?.terminalErrors
+            );
             if (terminalError) {
               throw terminalError;
             }
@@ -513,7 +518,11 @@ export function createContainerStepStrict<TCradle extends object>() {
           try {
             return await config.run(saga, input);
           } catch (err) {
-            const terminalError = resolveTerminalError(err, errorMapper);
+            const terminalError = resolveTerminalError(
+              err,
+              errorMapper,
+              config.options?.terminalErrors
+            );
             if (terminalError) {
               throw terminalError;
             }
@@ -554,6 +563,8 @@ export type ContainerWorkflowService<Name extends string, Input, Output, TCradle
   handlers: {
     run: (ctx: restate.Context, input: Input) => Promise<Output>;
   };
+  /** Underlying Restate service metadata, when exposed by the SDK version. */
+  service?: object;
   /**
    * Run this workflow as a step in a parent container saga.
    * Compensations join the parent's compensation stack.
@@ -647,12 +658,16 @@ export function createContainerWorkflow<TCradle extends object, Name extends str
         try {
           return await handler(saga, input);
         } catch (e) {
-          if (e instanceof restate.TerminalError) {
-            for (const compensate of saga.compensations.reverse()) {
-              await compensate();
-            }
+          const terminalError = resolveTerminalError(
+            e,
+            options?.asTerminalError,
+            options?.terminalErrors
+          );
+          const failure = terminalError ?? e;
+          if (failure instanceof restate.TerminalError) {
+            await runCompensations(saga.compensations);
           }
-          throw e;
+          throw failure;
         }
       },
     },
@@ -674,6 +689,8 @@ export type ContainerRestateWorkflowService<Name extends string, Input, Output, 
   handlers: {
     run: (ctx: restate.WorkflowContext, input: Input) => Promise<Output>;
   };
+  /** Underlying Restate workflow metadata, when exposed by the SDK version. */
+  workflow?: object;
   runAsStep: (parentSaga: ContainerWorkflowContext<TCradle>, input: Input) => Promise<Output>;
 };
 
@@ -753,12 +770,16 @@ export function createContainerRestateWorkflow<
         try {
           return await run(saga, ctx, input);
         } catch (e) {
-          if (e instanceof restate.TerminalError) {
-            for (const compensate of saga.compensations.reverse()) {
-              await compensate();
-            }
+          const terminalError = resolveTerminalError(
+            e,
+            options?.asTerminalError,
+            options?.terminalErrors
+          );
+          const failure = terminalError ?? e;
+          if (failure instanceof restate.TerminalError) {
+            await runCompensations(saga.compensations);
           }
-          throw e;
+          throw failure;
         }
       },
       ...handlers,
@@ -1117,12 +1138,16 @@ export function defineSagaFactory<RootCradle extends object, ScopedCradle extend
                 return await handler(saga, input);
               } catch (e) {
                 error = e instanceof Error ? e : new Error(String(e));
-                if (e instanceof restate.TerminalError) {
-                  for (const compensate of saga.compensations.reverse()) {
-                    await compensate();
-                  }
+                const terminalError = resolveTerminalError(
+                  e,
+                  options?.asTerminalError,
+                  options?.terminalErrors
+                );
+                const failure = terminalError ?? e;
+                if (failure instanceof restate.TerminalError) {
+                  await runCompensations(saga.compensations);
                 }
-                throw e;
+                throw failure;
               } finally {
                 await handleScopeDisposal(scopedContainer, disposeScope, error);
               }
@@ -1202,12 +1227,16 @@ export function defineSagaFactory<RootCradle extends object, ScopedCradle extend
                 return await run(saga, ctx, input);
               } catch (e) {
                 error = e instanceof Error ? e : new Error(String(e));
-                if (e instanceof restate.TerminalError) {
-                  for (const compensate of saga.compensations.reverse()) {
-                    await compensate();
-                  }
+                const terminalError = resolveTerminalError(
+                  e,
+                  options?.asTerminalError,
+                  options?.terminalErrors
+                );
+                const failure = terminalError ?? e;
+                if (failure instanceof restate.TerminalError) {
+                  await runCompensations(saga.compensations);
                 }
-                throw e;
+                throw failure;
               } finally {
                 await handleScopeDisposal(scopedContainer, disposeScope, error);
               }

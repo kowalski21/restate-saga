@@ -35,6 +35,12 @@ export type WorkflowOutput<T> = T extends {
   ? O
   : never;
 
+/** The typed client returned by the in-handler client helpers. */
+export type SagaClient<T extends RestateServiceDefinition> = restate.Client<T["handlers"]>;
+
+/** The typed fire-and-forget client returned by the in-handler helpers. */
+export type SagaSendClient<T extends RestateServiceDefinition> = restate.SendClient<T["handlers"]>;
+
 /**
  * Create a typed service client for calling another saga workflow.
  *
@@ -59,7 +65,7 @@ export function workflowClient<T extends RestateServiceDefinition>(
   // but SagaWorkflowService extends the base ServiceDefinition with runAsStep capability.
   // The cast preserves runtime behavior while the generic constraint ensures type safety for callers.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceClient(definition as any) as restate.Client<T["handlers"]>;
+  return ctx.serviceClient(definition as any) as SagaClient<T>;
 }
 
 /**
@@ -83,7 +89,7 @@ export function workflowSendClient<T extends RestateServiceDefinition>(
   definition: T
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceSendClient(definition as any) as restate.SendClient<T["handlers"]>;
+  return ctx.serviceSendClient(definition as any) as SagaSendClient<T>;
 }
 
 /**
@@ -106,7 +112,7 @@ export function serviceClient<T extends RestateServiceDefinition>(
   definition: T
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceClient(definition as any) as restate.Client<T["handlers"]>;
+  return ctx.serviceClient(definition as any) as SagaClient<T>;
 }
 
 /**
@@ -121,7 +127,7 @@ export function serviceSendClient<T extends RestateServiceDefinition>(
   definition: T
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.serviceSendClient(definition as any) as restate.SendClient<T["handlers"]>;
+  return ctx.serviceSendClient(definition as any) as SagaSendClient<T>;
 }
 
 /**
@@ -146,7 +152,7 @@ export function objectClient<T extends RestateObjectDefinition>(
   key: string
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.objectClient(definition as any, key) as restate.Client<T["handlers"]>;
+  return ctx.objectClient(definition as any, key) as SagaClient<T>;
 }
 
 /**
@@ -163,5 +169,5 @@ export function objectSendClient<T extends RestateObjectDefinition>(
   key: string
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ctx.objectSendClient(definition as any, key) as restate.SendClient<T["handlers"]>;
+  return ctx.objectSendClient(definition as any, key) as SagaSendClient<T>;
 }

@@ -1,7 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { StepResponse } from "../src/steps.js";
+import { StepResponse, failure, success } from "../src/steps.js";
 
 describe("StepResponse", () => {
+  it("provides concise success and failure helpers", () => {
+    expect(success({ ok: true }, { id: "1" })).toMatchObject({
+      output: { ok: true },
+      compensationData: { id: "1" },
+      failed: false,
+    });
+    expect(failure("Nope", { id: "1" })).toMatchObject({
+      compensationData: { id: "1" },
+      failed: true,
+      errorMessage: "Nope",
+    });
+  });
   describe("constructor", () => {
     it("should create a successful response with output and compensation data", () => {
       const response = new StepResponse(

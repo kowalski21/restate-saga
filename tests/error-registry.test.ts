@@ -138,6 +138,15 @@ describe("Error Registry", () => {
   });
 
   describe("resolveTerminalError", () => {
+    it("supports local error classes without global registration", () => {
+      const result = resolveTerminalError(new ValidationError("local"), undefined, [
+        ValidationError,
+      ]);
+
+      expect(result).toBeInstanceOf(restate.TerminalError);
+      expect(result?.message).toBe("local");
+    });
+
     it("should prioritize step-level mapper over global config", () => {
       registerTerminalErrors([ValidationError]);
 

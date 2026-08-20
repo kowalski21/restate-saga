@@ -119,6 +119,22 @@ export class StepResponse<Output, CompensationData> {
   }
 }
 
+/** Create a successful step response with inferred output and compensation types. */
+export function success<Output, CompensationData>(
+  output: Output,
+  compensationData: CompensationData
+): StepResponse<Output, CompensationData> {
+  return new StepResponse(output, compensationData);
+}
+
+/** Create a terminal step failure with inferred compensation data. */
+export function failure<CompensationData>(
+  message: string,
+  compensationData: CompensationData
+): StepResponse<never, CompensationData> {
+  return StepResponse.permanentFailure(message, compensationData);
+}
+
 /**
  * Creates a saga step with hybrid compensation (Restate + Medusa pattern).
  *
@@ -216,7 +232,11 @@ export function createSagaStep<Input, Output, CompensationData = Input>(opts: {
           return await opts.run({ ctx, input });
         } catch (err) {
           // Map custom errors to TerminalError (step-level first, then global)
-          const terminalError = resolveTerminalError(err, errorMapper);
+          const terminalError = resolveTerminalError(
+            err,
+            errorMapper,
+            opts.options?.terminalErrors
+          );
           if (terminalError) {
             throw terminalError;
           }
@@ -310,7 +330,11 @@ export function createSagaStepStrict<Input, Output, CompensationData>(opts: {
           return await opts.run({ ctx, input });
         } catch (err) {
           // Map custom errors to TerminalError (step-level first, then global)
-          const terminalError = resolveTerminalError(err, errorMapper);
+          const terminalError = resolveTerminalError(
+            err,
+            errorMapper,
+            opts.options?.terminalErrors
+          );
           if (terminalError) {
             throw terminalError;
           }

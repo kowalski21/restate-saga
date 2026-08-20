@@ -122,17 +122,26 @@ export function getGlobalErrorMapper(): ErrorMapper | null {
  *
  * @internal
  */
-function checkGlobalTerminalError(err: unknown): restate.TerminalError | undefined {
+function checkTerminalErrorClasses(
+  err: unknown,
+  errorClasses: Iterable<ErrorClass>
+): restate.TerminalError | undefined {
   // Check registered error classes
   if (err instanceof Error) {
-    for (const errorClass of Array.from(globalErrorConfig.terminalErrorClasses)) {
+    for (const errorClass of errorClasses) {
       if (err instanceof errorClass) {
         return new restate.TerminalError(err.message);
       }
     }
   }
 
-  // Check global mapper
+  return undefined;
+}
+
+function checkGlobalTerminalError(err: unknown): restate.TerminalError | undefined {
+  const registered = checkTerminalErrorClasses(err, globalErrorConfig.terminalErrorClasses);
+  if (registered) return registered;
+
   if (globalErrorConfig.globalMapper) {
     return globalErrorConfig.globalMapper(err);
   }
@@ -155,7 +164,8 @@ function checkGlobalTerminalError(err: unknown): restate.TerminalError | undefin
  */
 export function resolveTerminalError(
   err: unknown,
-  stepMapper?: ErrorMapper
+  stepMapper?: ErrorMapper,
+  localErrorClasses?: Iterable<ErrorClass>
 ): restate.TerminalError | undefined {
   // Step-level mapper takes precedence
   if (stepMapper) {
@@ -164,6 +174,9 @@ export function resolveTerminalError(
       return result;
     }
   }
+
+  const local = localErrorClasses && checkTerminalErrorClasses(err, localErrorClasses);
+  if (local) return local;
 
   // Fall back to global configuration
   return checkGlobalTerminalError(err);
